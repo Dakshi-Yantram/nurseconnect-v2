@@ -1,7 +1,22 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
+/**
+ * Consumer profile and account settings.
+ *
+ * Counts shown here are read from the store rather than invented, and there's
+ * no "Aarav Kumar" fallback name — an unnamed account says so and offers to
+ * fix it.
+ */
+import React, { useCallback, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
@@ -12,137 +27,201 @@ import { useStore } from '../../store';
 export default function ProfileScreen() {
   const router = useRouter();
   const user = useStore((s) => s.user);
-  const isOffline = useStore((s) => s.isOffline);
-  const setOffline = useStore((s) => s.setOffline);
+  const patients = useStore((s) => s.patients);
+  const addresses = useStore((s) => s.addresses);
+  const familyMembers = useStore((s) => s.familyMembers);
+  const bookings = useStore((s) => s.bookings);
+  const loadPatients = useStore((s) => s.loadPatients);
+  const loadAddresses = useStore((s) => s.loadAddresses);
+  const loadFamilyMembers = useStore((s) => s.loadFamilyMembers);
   const logout = useStore((s) => s.logout);
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    await Promise.allSettled([loadPatients(), loadAddresses(), loadFamilyMembers()]);
+  }, [loadPatients, loadAddresses, loadFamilyMembers]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh]),
+  );
+
+  const completedVisits = bookings.filter((b) => b.rawStatus === 'completed').length;
+  const needsName = !user?.name?.trim();
 
   const items = [
     {
-      icon: 'people-outline',
+      icon: 'people-outline' as const,
+      title: 'Patients',
+      sub: patients.length ? `${patients.length} on file` : 'Add who you book care for',
+      onPress: () => router.push('/patients'),
+      highlight: patients.length === 0,
+    },
+    {
+      icon: 'location-outline' as const,
+      title: 'Addresses',
+      sub: addresses.length ? `${addresses.length} saved` : 'Add a service address',
+      onPress: () => router.push('/addresses'),
+      highlight: addresses.length === 0,
+    },
+    {
+      icon: 'shield-checkmark-outline' as const,
+      title: 'Consents',
+      sub: 'Care, photos and records',
+      onPress: () => router.push('/consents'),
+    },
+    {
+      icon: 'people-circle-outline' as const,
       title: 'Family members',
-      sub: 'Manage who you care for',
+      sub: familyMembers.length ? `${familyMembers.length} added` : 'Share updates with family',
       onPress: () => router.push('/family-members'),
     },
     {
-      icon: 'document-text-outline',
-      title: 'ABHA records',
-      sub: 'Linked health records',
+      icon: 'document-text-outline' as const,
+      title: 'Health records',
+      sub: 'ABHA and linked documents',
       onPress: () => router.push('/abha'),
     },
     {
-      icon: 'card-outline',
-      title: 'Payment settings',
-      sub: 'Methods & invoices',
+      icon: 'card-outline' as const,
+      title: 'Payments',
+      sub: 'Receipts and refunds',
       onPress: () => router.push('/(family)/payments'),
     },
     {
-      icon: 'notifications-outline',
+      icon: 'notifications-outline' as const,
       title: 'Notifications',
-      sub: 'Preferences & history',
+      sub: 'Visit and payment updates',
       onPress: () => router.push('/notifications'),
     },
     {
-      icon: 'help-circle-outline',
+      icon: 'person-outline' as const,
+      title: 'Edit profile',
+      sub: 'Emergency contact',
+      onPress: () => router.push('/edit-profile'),
+    },
+    {
+      icon: 'help-buoy-outline' as const,
       title: 'Help & support',
-      sub: '24x7 customer care',
+      sub: 'FAQs and requests',
       onPress: () => router.push('/support'),
     },
     {
-      icon: 'shield-checkmark-outline',
+      icon: 'lock-closed-outline' as const,
       title: 'Privacy',
-      sub: 'Data sharing controls',
+      sub: 'How your data is used',
       onPress: () => router.push('/privacy'),
     },
-  ] as const;
+  ];
+
+  const signOut = () => {
+    Alert.alert('Sign out?', 'You’ll need to sign in again to see your bookings.', [
+      { text: 'Stay signed in', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          router.replace('/role-select');
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safe} testID="profile-screen" edges={['top']}>
       <OfflineBanner />
       <Header title="Profile" showBack={false} />
-      <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
-        {/* Hero */}
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 60 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={async () => {
+              setRefreshing(true);
+              await refresh();
+              setRefreshing(false);
+            }}
+          />
+        }
+      >
         <LinearGradient
           colors={Gradients.primary as any}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.hero}
         >
-          <Image
-            source={{
-              uri:
-                user?.avatar ||
-                'https://images.unsplash.com/photo-1633332755192-727a05c4013d?auto=format&fit=crop&w=200&q=80',
-            }}
-            style={styles.avatar}
-          />
-          <Text style={styles.name}>{user?.name || 'Aarav Kumar'}</Text>
-          <Text style={styles.phone}>+91 {user?.phone || '9876543210'}</Text>
-          <View style={styles.abha}>
-            <Ionicons name="shield-checkmark" size={12} color="#fff" />
-            <Text style={styles.abhaTxt}>ABHA: {user?.abhaId || '14-1234-5678-9012'}</Text>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={30} color={Colors.primary} />
           </View>
-          <TouchableOpacity style={styles.editBtn} testID="edit-profile" onPress={() => router.push('/edit-profile')}>
-            <Text style={styles.editTxt}>Edit Profile</Text>
-          </TouchableOpacity>
+          <Text style={styles.name}>{needsName ? 'Add your name' : user!.name}</Text>
+          <Text style={styles.contact}>
+            {[user?.phone, user?.email].filter(Boolean).join(' · ')}
+          </Text>
+
+          {completedVisits > 0 && (
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatTxt}>
+                {completedVisits} visit{completedVisits === 1 ? '' : 's'} completed
+              </Text>
+            </View>
+          )}
         </LinearGradient>
 
-        {/* List */}
+        {needsName && (
+          <TouchableOpacity
+            style={styles.nudge}
+            onPress={() => router.push('/edit-profile')}
+            testID="profile-add-name"
+          >
+            <Ionicons name="information-circle" size={18} color={Colors.primary} />
+            <Text style={styles.nudgeTxt}>
+              Add your name so your nurse knows who to ask for at the door.
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.list}>
-          {items.map((it) => (
+          {items.map((item) => (
             <TouchableOpacity
-              key={it.title}
+              key={item.title}
               style={styles.row}
-              onPress={it.onPress}
-              testID={`profile-${it.title.toLowerCase().replace(/[\s&]+/g, '-')}`}
+              onPress={item.onPress}
+              testID={`profile-${item.title}`}
             >
-              <View style={styles.rowIcon}>
-                <Ionicons name={it.icon as any} size={20} color={Colors.primary} />
+              <View
+                style={[styles.rowIcon, item.highlight && { backgroundColor: Colors.warningBg }]}
+              >
+                <Ionicons
+                  name={item.icon}
+                  size={20}
+                  color={item.highlight ? Colors.warning : Colors.primary}
+                />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.rowTitle}>{it.title}</Text>
-                <Text style={styles.rowSub}>{it.sub}</Text>
+                <Text style={styles.rowTitle}>{item.title}</Text>
+                <Text
+                  style={[styles.rowSub, item.highlight && { color: Colors.warning }]}
+                  numberOfLines={1}
+                >
+                  {item.sub}
+                </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
             </TouchableOpacity>
           ))}
-        </View>
 
-        <TouchableOpacity
-          style={[styles.row, { margin: Spacing.lg }]}
-          onPress={() => setOffline(!isOffline)}
-          testID="toggle-offline"
-        >
-          <View style={[styles.rowIcon, { backgroundColor: Colors.warningBg }]}>
-            <Ionicons name="cloud-offline-outline" size={20} color={Colors.warning} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.rowTitle}>Simulate offline mode</Text>
-            <Text style={styles.rowSub}>
-              {isOffline ? 'Currently offline – tap to go online' : 'Tap to test offline experience'}
+          <TouchableOpacity style={styles.row} onPress={signOut} testID="consumer-signout">
+            <View style={[styles.rowIcon, { backgroundColor: Colors.errorBg }]}>
+              <Ionicons name="log-out-outline" size={20} color={Colors.danger} />
+            </View>
+            <Text style={[styles.rowTitle, { flex: 1, marginLeft: 12, color: Colors.danger }]}>
+              Sign out
             </Text>
-          </View>
-          <View
-            style={[
-              styles.toggle,
-              { backgroundColor: isOffline ? Colors.warning : Colors.border },
-            ]}
-          >
-            <View style={[styles.toggleKnob, isOffline && { transform: [{ translateX: 18 }] }]} />
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={() => {
-            logout();
-            router.replace('/role-select');
-          }}
-          testID="logout-btn"
-        >
-          <Ionicons name="log-out-outline" size={20} color={Colors.error} />
-          <Text style={styles.logoutTxt}>Log out</Text>
-        </TouchableOpacity>
-        <Text style={styles.version}>NurseConnect v1.0.0 · Powered by Yantram</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -151,41 +230,43 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
   hero: {
-    margin: Spacing.lg,
-    borderRadius: Radius.xl,
-    padding: 24,
     alignItems: 'center',
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    borderRadius: Radius.xl,
     ...Shadows.floating,
   },
   avatar: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.4)',
-  },
-  name: { ...Typography.h2, color: '#fff', fontWeight: '800' as const, marginTop: 12 },
-  phone: { ...Typography.body, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
-  abha: {
-    flexDirection: 'row',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#fff',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.pill,
-    marginTop: 8,
-    gap: 4,
+    justifyContent: 'center',
   },
-  abhaTxt: { ...Typography.caption, color: '#fff' },
-  editBtn: {
+  name: { ...Typography.h3, color: '#fff', marginTop: Spacing.sm },
+  contact: { ...Typography.small, color: 'rgba(255,255,255,0.85)', marginTop: 4 },
+  heroStat: {
     backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 24,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
     borderRadius: Radius.pill,
-    marginTop: 16,
+    marginTop: Spacing.md,
   },
-  editTxt: { ...Typography.bodyBold, color: '#fff' },
-  list: { marginHorizontal: Spacing.lg, gap: 6 },
+  heroStatTxt: { ...Typography.small, color: '#fff', fontWeight: '600' as const },
+  nudge: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    backgroundColor: Colors.infoBg,
+    borderRadius: Radius.md,
+    padding: 12,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+  },
+  nudgeTxt: { ...Typography.small, color: Colors.primary, flex: 1, lineHeight: 18 },
+  list: { padding: Spacing.lg, gap: 8 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -195,33 +276,13 @@ const styles = StyleSheet.create({
     ...Shadows.card,
   },
   rowIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 42,
+    height: 42,
+    borderRadius: 13,
     backgroundColor: Colors.infoBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
   rowSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  toggle: {
-    width: 42,
-    height: 24,
-    borderRadius: 12,
-    padding: 2,
-    justifyContent: 'center',
-  },
-  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
-  logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    margin: Spacing.lg,
-    padding: 14,
-    backgroundColor: Colors.errorBg,
-    borderRadius: Radius.lg,
-    gap: 8,
-  },
-  logoutTxt: { ...Typography.bodyBold, color: Colors.error },
-  version: { ...Typography.caption, color: Colors.textTertiary, textAlign: 'center', marginBottom: 24 },
 });

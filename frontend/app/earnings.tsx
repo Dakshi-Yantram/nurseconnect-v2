@@ -7,6 +7,7 @@ import { Header } from '../components/Header';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
+import { formatDay, humanize, inr } from '../lib/format';
 
 export default function Earnings() {
   const assignments = useStore((s) => s.assignments);
@@ -17,14 +18,15 @@ export default function Earnings() {
     loadEarningsAPI().catch(() => {});
   }, [loadEarningsAPI]);
 
-  const completed = assignments.filter((a) => a.status === 'completed');
-  const backendTotal = earnings ? Number(earnings.total_paid) + Number(earnings.total_pending) : 0;
-  const totalThisMonth = backendTotal > 0 ? backendTotal : assignments.reduce((s, a) => s + a.netCost, 0);
-  const completedTotal = earnings ? Number(earnings.total_paid) : completed.reduce((s, a) => s + a.netCost, 0);
-  const upcomingTotal = earnings
-    ? Number(earnings.total_pending)
-    : assignments.reduce((s, a) => s + (a.status !== 'completed' ? a.netCost : 0), 0);
+  // Only the payout ledger is authoritative about money. Falling back to
+  // summing booking values (as this screen used to) overstated earnings: a
+  // booking's total is what the *consumer* pays, before commission and TDS,
+  // and it counted visits that were never completed or paid out.
+  const completedTotal = Number(earnings?.total_paid ?? 0);
+  const upcomingTotal = Number(earnings?.total_pending ?? 0);
+  const totalThisMonth = completedTotal + upcomingTotal;
   const payouts = earnings?.payouts || [];
+  const completedVisits = assignments.filter((a) => a.rawStatus === 'completed').length;
 
   return (
     <SafeAreaView style={styles.safe} testID="earnings-screen" edges={['top']}>
@@ -37,20 +39,20 @@ export default function Earnings() {
           end={{ x: 1, y: 1 }}
           style={styles.hero}
         >
-          <Text style={styles.label}>This month</Text>
-          <Text style={styles.value}>₹{totalThisMonth.toLocaleString('en-IN')}</Text>
+          <Text style={styles.label}>Total earnings</Text>
+          <Text style={styles.value}>{inr(totalThisMonth)}</Text>
           <View style={styles.heroSplit}>
             <View style={styles.splitItem}>
-              <Text style={styles.splitLabel}>Earned</Text>
-              <Text style={styles.splitValue}>₹{completedTotal}</Text>
+              <Text style={styles.splitLabel}>Paid out</Text>
+              <Text style={styles.splitValue}>{inr(completedTotal)}</Text>
             </View>
             <View style={styles.splitItem}>
-              <Text style={styles.splitLabel}>Upcoming</Text>
-              <Text style={styles.splitValue}>₹{upcomingTotal}</Text>
+              <Text style={styles.splitLabel}>Pending</Text>
+              <Text style={styles.splitValue}>{inr(upcomingTotal)}</Text>
             </View>
             <View style={styles.splitItem}>
-              <Text style={styles.splitLabel}>Visits</Text>
-              <Text style={styles.splitValue}>{assignments.length}</Text>
+              <Text style={styles.splitLabel}>Visits done</Text>
+              <Text style={styles.splitValue}>{completedVisits}</Text>
             </View>
           </View>
         </LinearGradient>
@@ -63,13 +65,13 @@ export default function Earnings() {
                 <Ionicons name="cash" size={18} color={Colors.success} />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.rowTitle}>Payout {p.status}</Text>
+                <Text style={styles.rowTitle}>Payout · {humanize(p.status)}</Text>
                 <Text style={styles.rowSub}>
-                  Booking ref · TDS ₹{Number(p.tds_deducted).toFixed(0)}
+                  Gross {inr(Number(p.gross_amount))} · TDS {inr(Number(p.tds_deducted))}
                 </Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.amt}>+₹{Number(p.net_amount).toFixed(0)}</Text>
+                <Text style={styles.amt}>+{inr(Number(p.net_amount))}</Text>
                 <Text style={styles.date}>
                   {p.paid_at
                     ? new Date(p.paid_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
@@ -90,25 +92,26 @@ export default function Earnings() {
           </View>
         )}
 
-        <Text style={styles.section}>Recent visits</Text>
-        {assignments.map((a) => (
-          <View key={a.id} style={styles.row}>
-            <View style={[styles.icon, { backgroundColor: Colors.infoBg }]}>
-              <MaterialCommunityIcons name="medical-bag" size={18} color={Colors.primary} />
+        <Text style={styles.section}>Completed visits</Text>
+        <Text style={styles.sectionNote}>
+          Your payout per visit is the visit value less platform commission and TDS — see the
+          payout rows above for the exact amounts.
+        </Text>
+        {assignments
+          .filter((a) => a.rawStatus === 'completed')
+          .map((a) => (
+            <View key={a.id} style={styles.row}>
+              <View style={[styles.icon, { backgroundColor: Colors.infoBg }]}>
+                <MaterialCommunityIcons name="medical-bag" size={18} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.rowTitle}>{a.careTitle}</Text>
+                <Text style={styles.rowSub}>
+                  {formatDay(a.date, { day: '2-digit', month: 'short' })} · {a.duration}h
+                </Text>
+              </View>
             </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.rowTitle}>{a.careTitle}</Text>
-              <Text style={styles.rowSub}>
-                {new Date(a.date).toLocaleDateString('en-IN', {
-                  day: '2-digit',
-                  month: 'short',
-                })}{' '}
-                · {a.duration}h
-              </Text>
-            </View>
-            <Text style={styles.amt}>₹{a.netCost}</Text>
-          </View>
-        ))}
+          ))}
       </ScrollView>
     </SafeAreaView>
   );
@@ -123,7 +126,8 @@ const styles = StyleSheet.create({
   splitItem: { flex: 1, padding: 10, backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: Radius.md },
   splitLabel: { ...Typography.caption, color: 'rgba(255,255,255,0.85)', fontSize: 9 },
   splitValue: { ...Typography.h4, color: '#fff', fontWeight: '700' as const, marginTop: 4 },
-  section: { ...Typography.h3, color: Colors.textPrimary, marginTop: 24, marginBottom: 12 },
+  section: { ...Typography.h3, color: Colors.textPrimary, marginTop: 24, marginBottom: 8 },
+  sectionNote: { ...Typography.small, color: Colors.textSecondary, marginBottom: 12, lineHeight: 17 },
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, padding: 14, borderRadius: Radius.lg, marginBottom: 8, ...Shadows.card },
   icon: { width: 36, height: 36, borderRadius: 12, backgroundColor: Colors.successBg, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { ...Typography.bodyBold, color: Colors.textPrimary },

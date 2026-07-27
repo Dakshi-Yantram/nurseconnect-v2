@@ -2,7 +2,8 @@
  * Backend ↔ Frontend type mappers.
  * Keeps the existing UI store contracts intact while routing backend data through.
  */
-import type { Nurse, Booking, NotificationItem } from '../types';
+import type { Nurse, Booking, BookingStatus, NotificationItem, PaymentStatus } from '../types';
+import { badgeToneFor } from '../lib/booking-domain';
 
 export interface BackendWorker {
   id: string;
@@ -69,10 +70,18 @@ export interface BackendBooking {
   cancelled_at: string | null;
   accepted_at: string | null;
   created_at: string;
-  // Patch 3 — proximity dispatch
+  // Proximity dispatch
   assignment_wave?: number | null;
   assignment_escalated_at?: string | null;
   distance_km?: number | null;
+  /**
+   * Enrichment the backend adds on the list/detail endpoints. Preferred over
+   * client-side lookups — `service_name` in particular is resolved from
+   * whichever of service/package the booking actually references.
+   */
+  patient_name?: string | null;
+  service_name?: string | null;
+  worker_name?: string | null;
 }
 
 export interface BackendNotification {
@@ -116,52 +125,60 @@ export function mapWorker(w: BackendWorker): Nurse {
   };
 }
 
-export function mapBooking(b: BackendBooking, careTitleResolver?: (sid: string | null, pid: string | null) => string): Booking {
+export function mapBooking(
+  b: BackendBooking,
+  careTitleResolver?: (sid: string | null, pid: string | null) => string,
+): Booking {
   const addr = b.address_snapshot || {};
-  const addrStr = [addr.line1, addr.line2, addr.city].filter(Boolean).join(', ');
+  const addrStr = [addr.line1, addr.line2, addr.landmark, addr.city, addr.pincode]
+    .filter(Boolean)
+    .join(', ');
   const careTypeId = b.service_id || b.package_id || 'general';
-  const careTitle = careTitleResolver ? careTitleResolver(b.service_id, b.package_id) : 'Home Nursing Visit';
-  const statusMap: Record<string, Booking['status']> = {
-    pending_payment: 'scheduled',
-    confirmed: 'scheduled',
-    pending_match: 'scheduled',
-    matched: 'scheduled',
-    worker_assigned: 'scheduled',
-    assigned: 'scheduled',
-    accepted: 'scheduled',
-    en_route: 'enroute',
-    worker_en_route: 'enroute',
-    worker_arrived: 'active',
-    arrived: 'active',
-    in_progress: 'active',
-    completed: 'completed',
-    cancelled: 'cancelled',
-    no_show: 'cancelled',
-    missed: 'cancelled',
-  };
+  // Prefer the server's own label: it resolves whichever of service/package
+  // the booking references, so it can never disagree with the catalogue.
+  const careTitle =
+    b.service_name ||
+    (careTitleResolver ? careTitleResolver(b.service_id, b.package_id) : '') ||
+    'Home nursing visit';
+
+  const rawStatus = (b.status || 'draft') as BookingStatus;
+  const time = (b.scheduled_start_time || '00:00:00').slice(0, 5);
+
   return {
     id: b.id,
     nurseId: b.worker_id || 'unassigned',
-    nurseName: b.worker_id ? 'Assigned nurse' : 'Awaiting match',
-    nurseAvatar:
-      'https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&w=200&q=80',
+    nurseName: b.worker_name || (b.worker_id ? 'Your nurse' : 'Awaiting match'),
+    nurseAvatar: '',
     careTypeId,
     careTitle,
+    patientName: b.patient_name ?? undefined,
     date: b.scheduled_date,
-    slot: (b.scheduled_start_time || '').slice(0, 5),
+    slot: time,
     duration: Math.max(1, Math.round((b.scheduled_duration_minutes || 60) / 60)),
     address: addrStr || 'Address on file',
     cost: toNum(b.total_amount),
     subsidy: toNum(b.subsidy_amount),
     netCost: Math.max(0, toNum(b.total_amount) - toNum(b.subsidy_amount)),
-    status: statusMap[b.status] || 'scheduled',
-    // Backend uses Razorpay-aligned payment status enum: pending|initiated|captured|failed|refunded|partially_refunded
+    status: badgeToneFor(rawStatus),
+    rawStatus,
+    paymentStatus: (b.payment_status || 'pending') as PaymentStatus,
+    // Backend uses a Razorpay-aligned enum:
+    // pending | initiated | captured | failed | refunded | partially_refunded
     paid: b.payment_status === 'captured' || b.payment_status === 'partially_refunded',
     createdAt: b.created_at,
+    // The backend combines date + time as UTC, so mirror that here — building
+    // it as a local instant would shift the 6-hour cancellation cutoff by the
+    // device's timezone offset.
+    scheduledStartISO: b.scheduled_date ? `${b.scheduled_date}T${time}:00Z` : undefined,
+    isUrgent: !!b.is_urgent,
     notes: b.special_instructions || undefined,
     patientId: b.patient_id,
     bookingRef: b.booking_ref,
-    // Patch 3 — proximity dispatch surface for distance chip + Maps deep link.
+    serviceId: b.service_id,
+    packageId: b.package_id,
+    cancellationReason: b.cancellation_reason,
+    acceptedAt: b.accepted_at,
+    // Proximity dispatch surface for the distance chip + Maps deep link.
     distanceKm: typeof b.distance_km === 'number' ? b.distance_km : undefined,
     latitude: b.latitude !== null && b.latitude !== undefined ? toNum(b.latitude) : undefined,
     longitude: b.longitude !== null && b.longitude !== undefined ? toNum(b.longitude) : undefined,

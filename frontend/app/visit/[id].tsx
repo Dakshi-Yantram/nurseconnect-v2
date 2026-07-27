@@ -1,36 +1,11 @@
 /**
- * visit/[id].tsx — Consumer active visit detail screen
+ * Consumer booking detail.
  *
- * PATCH 4 — Mobile app (Expo / React Native)
- *
- * SAVE THIS FILE TO:
- *   frontend/app/visit/[id].tsx
- *
- * FIXED VERSION — aligned to the actual constants/theme.ts in this repo:
- *   - No Spacing.sm / Spacing.xl  → using Spacing.md / Spacing.lg only
- *   - No Radius.md                → using Radius.lg
- *   - No Typography.body          → using Typography.bodyBold (weight overridden where needed)
- *   - No Colors.border            → using Colors.divider
- *
- * WHAT IT DOES:
- *   The consumer's view of an active or upcoming booking. Phases:
- *
- *   Phase 1 — UPCOMING / NURSE ASSIGNED
- *     Shows booking details, nurse name, scheduled time.
- *     "Generate visit code" button appears once nurse is assigned (status=active/claimed).
- *     On tap → POST /api/visits/{id}/generate-start-otp → 4-digit code shown on screen.
- *     The code is also SMSed to the consumer's phone.
- *
- *   Phase 2 — IN PROGRESS
- *     Shows live status, nurse name, started time.
- *     Links to live tracking screen.
- *
- *   Phase 3 — COMPLETED
- *     Shows family summary, duration, and prompts for rating.
- *     Links to visit-success screen for full post-visit summary.
+ * Shows the live visit-start code, the cancellation window (matching the
+ * server's 6-hour rule so we never offer a button that will be refused), the
+ * payment state, and — once the nurse checks out — the visit report.
  */
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -42,438 +17,469 @@ import {
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
+import { OfflineBanner } from '../../components/OfflineBanner';
+import { BookingStatusBadge } from '../../components/BookingStatusBadge';
+import { VisitOtpChip } from '../../components/VisitOtpChip';
 import { GradientButton } from '../../components/GradientButton';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
-import { api } from '../../lib/api';
 import { useStore } from '../../store';
+import { bookingsService } from '../../services/bookings.service';
+import { visitsService, type VisitRecordOut } from '../../services/visits.service';
+import { mapBooking } from '../../services/mappers';
+import {
+  CANCELLATION_CLOSED_MESSAGE,
+  canCancel,
+  hasAssignedNurse,
+  isTerminal,
+} from '../../lib/booking-domain';
+import { formatDay, formatTime, inr } from '../../lib/format';
+import { callManager } from '../../lib/call-manager';
+import type { Booking } from '../../types';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface VisitRecord {
-  id: string;
-  booking_id: string;
-  status: string;
-  check_in_at: string | null;
-  check_out_at: string | null;
-  family_summary: string | null;
-  actual_duration_minutes: number | null;
-  rating_by_consumer: number | null;
-}
-
-interface BookingDetail {
-  id: string;
-  booking_ref: string;
-  status: string;
-  worker_id: string | null;
-  scheduled_date: string;
-  scheduled_start_time: string;
-  address_snapshot: { line1?: string; city?: string };
-  total_amount: number;
-}
-
-// ── OTP states ────────────────────────────────────────────────────────────────
-type OtpState = 'idle' | 'loading' | 'active' | 'expired';
-
-// ── Main screen ───────────────────────────────────────────────────────────────
-export default function VisitDetailScreen() {
+export default function BookingDetail() {
   const router = useRouter();
-  const { id: bookingId } = useLocalSearchParams<{ id: string }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
 
-  const [booking, setBooking] = useState<BookingDetail | null>(null);
-  const [visit, setVisit] = useState<VisitRecord | null>(null);
-  const [loading, setLoading] = useState(true);
+  const storeBooking = useStore((s) => s.bookings.find((b) => b.id === id));
+  const packages = useStore((s) => s.packages);
+  const services = useStore((s) => s.services);
+  const refreshBookings = useStore((s) => s.refreshBookings);
+  const cancelBookingAPI = useStore((s) => s.cancelBookingAPI);
+  const refundBookingAPI = useStore((s) => s.refundBookingAPI);
+
+  const [booking, setBooking] = useState<Booking | null>(storeBooking ?? null);
+  const [visit, setVisit] = useState<VisitRecordOut | null>(null);
+  const [loading, setLoading] = useState(!storeBooking);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // OTP state
-  const [otpState, setOtpState] = useState<OtpState>('idle');
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const [displayOtp, setDisplayOtp] = useState('');  // shown on screen if SMS fails
-  const [otpSmsConfirmed, setOtpSmsConfirmed] = useState(false);
+  const resolveTitle = useCallback(
+    (serviceId: string | null, packageId: string | null) =>
+      packages.find((p) => p.id === packageId)?.name ??
+      services.find((s) => s.id === serviceId)?.name ??
+      'Home nursing visit',
+    [packages, services],
+  );
 
-  // NOTE: store Booking type (from ../types) uses careTitle / nurseName /
-  // address (flat string) — not service / patientName / nested address.
-  // storeBooking is kept only as a UI fallback while the backend BookingDetail
-  // (fetched via api.get below) loads.
-  const bookings = useStore((s) => s.bookings);
-  const storeBooking = bookings.find((b) => b.id === bookingId);
-
-  // ── Load data ──────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
-    if (!bookingId) return;
+    if (!id) return;
+    setError('');
     try {
-      const [bRes, vRes] = await Promise.allSettled([
-        api.get(`/bookings/${bookingId}`),
-        api.get(`/visits/${bookingId}`),
-      ]);
-      if (bRes.status === 'fulfilled') setBooking(bRes.value);
-      if (vRes.status === 'fulfilled') setVisit(vRes.value);
+      const raw = await bookingsService.get(id);
+      setBooking(mapBooking(raw, resolveTitle));
+    } catch (e: any) {
+      setError(e?.message || 'Could not load this booking');
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
-  }, [bookingId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // OTP countdown
-  useEffect(() => {
-    if (otpState !== 'active' || secondsLeft <= 0) return;
-    const t = setTimeout(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) { setOtpState('expired'); return 0; }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [otpState, secondsLeft]);
-
-  // Poll for visit start when OTP is active
-  useEffect(() => {
-    if (otpState !== 'active') return;
-    const interval = setInterval(async () => {
-      try {
-        const v: VisitRecord = await api.get(`/visits/${bookingId}`);
-        if (v.check_in_at) {
-          setVisit(v);
-          setOtpState('idle');
-          clearInterval(interval);
-        }
-      } catch { /* silent */ }
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, [otpState, bookingId]);
-
-  // ── Generate OTP ───────────────────────────────────────────────────────────
-  const handleGenerateOtp = async () => {
-    setOtpState('loading');
+    // The visit record only exists once the nurse has checked in, so a failure
+    // here is normal rather than an error worth surfacing.
     try {
-      const res = await api.post(`/visits/${bookingId}/generate-start-otp`, {});
-      setOtpState('active');
-      setSecondsLeft(res.expires_in_seconds ?? 600);
-      setOtpSmsConfirmed(res.sms_sent ?? false);
-      // If backend returns _dev_otp (dev mode only), show it on screen
-      if (res._dev_otp) setDisplayOtp(res._dev_otp);
-    } catch (e: any) {
-      setOtpState('idle');
-      Alert.alert('Could not generate code', e?.message || 'Please try again.');
+      setVisit(await visitsService.get(id));
+    } catch {
+      setVisit(null);
     }
+  }, [id, resolveTitle]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    await refreshBookings().catch(() => {});
+    setRefreshing(false);
   };
 
-  // ── Derived state ──────────────────────────────────────────────────────────
-  const status = booking?.status ?? storeBooking?.status ?? '';
-  const isActive = status === 'active' || status === 'claimed' || status === 'in_progress';
-  const isInProgress = visit?.check_in_at != null || status === 'in_progress';
-  const isCompleted = status === 'completed' || visit?.check_out_at != null;
-  const nurseAssigned = !!booking?.worker_id;
+  const cancellable = useMemo(() => (booking ? canCancel(booking) : false), [booking]);
 
-  const mins = Math.floor(secondsLeft / 60);
-  const secs = secondsLeft % 60;
+  const describeError = (e: any, fallback: string) => {
+    const detail = e?.detail?.detail ?? e?.detail;
+    if (detail?.code === 'CANCELLATION_WINDOW_CLOSED') return CANCELLATION_CLOSED_MESSAGE;
+    if (typeof detail?.message === 'string') return detail.message;
+    return e?.message || fallback;
+  };
+
+  const confirmCancel = () => {
+    if (!booking) return;
+    const refundable = booking.paid;
+    Alert.alert(
+      refundable ? 'Cancel and request refund?' : 'Cancel this booking?',
+      refundable
+        ? `Your payment of ${inr(booking.netCost)} will be refunded to the original payment method within 5–7 working days.`
+        : 'This booking will be cancelled and no nurse will be dispatched.',
+      [
+        { text: 'Keep booking', style: 'cancel' },
+        {
+          text: refundable ? 'Cancel & refund' : 'Cancel booking',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            try {
+              if (refundable) {
+                await refundBookingAPI(
+                  booking.id,
+                  booking.netCost,
+                  `Consumer cancelled — ${booking.careTitle}`,
+                );
+              } else {
+                await cancelBookingAPI(booking.id, 'Cancelled by consumer');
+              }
+              await load();
+            } catch (e: any) {
+              Alert.alert('Could not cancel', describeError(e, 'Please try again.'));
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <Header title="Visit detail" />
-        <View style={styles.center}><ActivityIndicator size="large" color={Colors.teal} /></View>
+        <Header title="Booking" fallbackHref="/(family)/visits" />
+        <View style={styles.centered}>
+          <ActivityIndicator color={Colors.primary} />
+        </View>
       </SafeAreaView>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <Header title="Visit detail" />
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.teal} />}
-      >
+  if (!booking) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <Header title="Booking" fallbackHref="/(family)/visits" />
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle-outline" size={40} color={Colors.textTertiary} />
+          <Text style={styles.errorTxt}>{error || 'This booking could not be found.'}</Text>
+          <GradientButton
+            title="Try again"
+            variant="outline"
+            fullWidth={false}
+            onPress={load}
+            style={{ marginTop: Spacing.md }}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
-        {/* Booking summary card */}
+  const nurseAssigned = hasAssignedNurse(booking);
+  const trackable = ['worker_en_route', 'worker_arrived', 'in_progress'].includes(
+    booking.rawStatus,
+  );
+  const showCancel = !isTerminal(booking.rawStatus) && booking.rawStatus !== 'draft';
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']} testID="booking-detail">
+      <OfflineBanner />
+      <Header title={booking.bookingRef || 'Booking'} fallbackHref="/(family)/visits" />
+
+      <ScrollView
+        contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* ---------------------------------------------------- summary --- */}
         <View style={styles.card}>
-          <View style={styles.row}>
-            <Ionicons name="calendar-outline" size={18} color={Colors.textSecondary} />
-            <Text style={styles.cardLabel}>
-              {booking?.scheduled_date} at {booking?.scheduled_start_time?.slice(0, 5)}
-            </Text>
+          <View style={styles.cardHead}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.title}>{booking.careTitle}</Text>
+              <Text style={styles.sub}>
+                {formatDay(booking.date)} · {formatTime(booking.slot)}
+              </Text>
+            </View>
+            <BookingStatusBadge status={booking.rawStatus} />
           </View>
-          <View style={[styles.row, { marginTop: Spacing.md }]}>
-            <Ionicons name="location-outline" size={18} color={Colors.textSecondary} />
-            <Text style={styles.cardLabel}>
-              {booking?.address_snapshot?.line1}, {booking?.address_snapshot?.city}
-            </Text>
-          </View>
-          <View style={[styles.row, { marginTop: Spacing.md }]}>
-            <Ionicons name="receipt-outline" size={18} color={Colors.textSecondary} />
-            <Text style={styles.cardLabel}>
-              Ref: {booking?.booking_ref} · ₹{Number(booking?.total_amount ?? 0).toLocaleString('en-IN')}
-            </Text>
-          </View>
+
+          {booking.rawStatus === 'rematch_pending' && (
+            <View style={styles.infoRow}>
+              <Ionicons name="sync" size={16} color={Colors.warning} />
+              <Text style={[styles.infoTxt, { color: Colors.warning }]}>
+                Your nurse had to cancel. We’re finding you a replacement and will notify you as
+                soon as someone accepts.
+              </Text>
+            </View>
+          )}
+
+          <VisitOtpChip bookingId={booking.id} status={booking.rawStatus} />
+
+          <View style={styles.divider} />
+
+          <DetailRow icon="person-outline" label="Nurse">
+            {nurseAssigned ? booking.nurseName : 'Not assigned yet'}
+          </DetailRow>
+          <DetailRow icon="location-outline" label="Address">
+            {booking.address}
+          </DetailRow>
+          <DetailRow icon="hourglass-outline" label="Duration">
+            {`${booking.duration}h`}
+          </DetailRow>
+          {!!booking.notes && (
+            <DetailRow icon="document-text-outline" label="Instructions">
+              {booking.notes}
+            </DetailRow>
+          )}
+          {!!booking.cancellationReason && (
+            <DetailRow icon="close-circle-outline" label="Cancellation reason">
+              {booking.cancellationReason}
+            </DetailRow>
+          )}
         </View>
 
-        {/* Status section */}
-        <StatusBadge status={status} inProgress={isInProgress} isCompleted={isCompleted} />
-
-        {/* ── IN PROGRESS: tracking link ─────────────────────────────────── */}
-        {isInProgress && !isCompleted && (
-          <TouchableOpacity
-            style={styles.trackingBtn}
-            onPress={() => router.push({ pathname: '/tracking/[id]', params: { id: bookingId! } })}
-          >
-            <Ionicons name="navigate-outline" size={18} color={Colors.teal} />
-            <Text style={styles.trackingBtnTxt}>Live tracking</Text>
-            <Ionicons name="chevron-forward" size={16} color={Colors.teal} />
-          </TouchableOpacity>
-        )}
-
-        {/* ── COMPLETED: summary ─────────────────────────────────────────── */}
-        {isCompleted && (
-          <>
-            {visit?.family_summary ? (
-              <View style={styles.summaryCard}>
-                <Text style={styles.summaryLabel}>Care summary</Text>
-                <Text style={styles.summaryTxt}>{visit.family_summary}</Text>
-              </View>
-            ) : null}
+        {/* ---------------------------------------------------- actions --- */}
+        <View style={styles.actionRow}>
+          {trackable && (
             <TouchableOpacity
-              style={styles.summaryBtn}
-              onPress={() => router.push({ pathname: '/visit-success/[id]', params: { id: bookingId! } })}
+              style={styles.action}
+              onPress={() =>
+                router.push({ pathname: '/tracking/[id]', params: { id: booking.id } })
+              }
+              testID="action-track"
             >
-              <Text style={styles.summaryBtnTxt}>View full summary & rate</Text>
-              <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
+              <Ionicons name="navigate" size={20} color={Colors.primary} />
+              <Text style={styles.actionTxt}>Track</Text>
             </TouchableOpacity>
-          </>
-        )}
+          )}
+          {nurseAssigned && (
+            <TouchableOpacity
+              style={styles.action}
+              onPress={() =>
+                router.push({ pathname: '/chat/[bookingId]', params: { bookingId: booking.id } })
+              }
+              testID="action-chat"
+            >
+              <Ionicons name="chatbubbles" size={20} color={Colors.primary} />
+              <Text style={styles.actionTxt}>Message</Text>
+            </TouchableOpacity>
+          )}
+          {nurseAssigned && (
+            <TouchableOpacity
+              style={styles.action}
+              onPress={() => callManager.startCall(booking.id, booking.nurseName)}
+              testID="action-call"
+            >
+              <Ionicons name="call" size={20} color={Colors.primary} />
+              <Text style={styles.actionTxt}>Call</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.action}
+            onPress={() => router.push('/support/raise')}
+            testID="action-help"
+          >
+            <Ionicons name="help-buoy" size={20} color={Colors.primary} />
+            <Text style={styles.actionTxt}>Get help</Text>
+          </TouchableOpacity>
+        </View>
 
-        {/* ── OTP SECTION — only when nurse assigned and visit not started ─ */}
-        {isActive && nurseAssigned && !isInProgress && !isCompleted && (
-          <View style={styles.otpCard}>
-            <View style={styles.otpHeader}>
-              <View style={styles.otpIconCircle}>
-                <Ionicons name="shield-checkmark-outline" size={24} color={Colors.teal} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.otpTitle}>Start visit verification</Text>
-                <Text style={styles.otpSub}>
-                  When your nurse arrives, generate a code and share it with them.
-                </Text>
-              </View>
-            </View>
+        {/* ---------------------------------------------------- payment --- */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Payment</Text>
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Total</Text>
+            <Text style={styles.amount}>{inr(booking.netCost)}</Text>
+          </View>
+          <View style={styles.payStatusRow}>
+            <Ionicons
+              name={booking.paid ? 'checkmark-circle' : 'time-outline'}
+              size={16}
+              color={booking.paid ? Colors.success : Colors.warning}
+            />
+            <Text
+              style={[
+                styles.payStatusTxt,
+                { color: booking.paid ? Colors.success : Colors.warning },
+              ]}
+            >
+              {paymentLabel(booking)}
+            </Text>
+          </View>
 
-            {otpState === 'idle' && (
-              <TouchableOpacity style={styles.genBtn} onPress={handleGenerateOtp}>
-                <Ionicons name="key-outline" size={18} color="#fff" />
-                <Text style={styles.genBtnTxt}>Generate visit code</Text>
-              </TouchableOpacity>
-            )}
+          {booking.rawStatus === 'pending_payment' && (
+            <GradientButton
+              title={`Pay ${inr(booking.netCost)}`}
+              onPress={() =>
+                router.push({ pathname: '/payment', params: { bookingId: booking.id } })
+              }
+              style={{ marginTop: Spacing.md }}
+              testID="pay-now"
+            />
+          )}
+        </View>
 
-            {otpState === 'expired' && (
+        {/* ------------------------------------------------ visit report -- */}
+        {!!visit?.check_out_at && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Visit report</Text>
+            {!!visit.family_summary && (
               <>
-                <Text style={styles.otpExpiredTxt}>Code expired. Generate a new one.</Text>
-                <TouchableOpacity style={styles.genBtn} onPress={handleGenerateOtp}>
-                  <Ionicons name="refresh-outline" size={18} color="#fff" />
-                  <Text style={styles.genBtnTxt}>Regenerate code</Text>
-                </TouchableOpacity>
+                <Text style={styles.reportLabel}>Summary for you</Text>
+                <Text style={styles.reportBody}>{visit.family_summary}</Text>
               </>
             )}
-
-            {otpState === 'loading' && (
-              <View style={styles.otpLoading}>
-                <ActivityIndicator size="small" color={Colors.teal} />
-                <Text style={styles.otpLoadingTxt}>Generating…</Text>
-              </View>
-            )}
-
-            {otpState === 'active' && (
+            {!!visit.care_notes && (
               <>
-                <Text style={styles.otpInstructionTxt}>
-                  {otpSmsConfirmed
-                    ? 'Code sent to your phone. Read it aloud to your nurse.'
-                    : 'Show the code below to your nurse.'}
-                </Text>
-
-                {/* Show OTP digits if available (dev mode or SMS fallback) */}
-                {displayOtp ? (
-                  <View style={styles.otpDisplay}>
-                    {displayOtp.split('').map((digit, i) => (
-                      <View key={i} style={styles.otpDigitBox}>
-                        <Text style={styles.otpDigit}>{digit}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : (
-                  // Production: code is in SMS only — show placeholder boxes
-                  <View style={styles.otpDisplay}>
-                    {[0, 1, 2, 3].map((i) => (
-                      <View key={i} style={[styles.otpDigitBox, styles.otpDigitHidden]}>
-                        <View style={styles.otpDash} />
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {/* Countdown */}
-                <View style={styles.countdownRow}>
-                  <Text style={styles.countdownLabel}>Expires in</Text>
-                  <Text style={[styles.countdownValue, secondsLeft < 60 && { color: Colors.error }]}>
-                    {mins}:{String(secs).padStart(2, '0')}
-                  </Text>
-                </View>
-
-                <TouchableOpacity style={styles.regenBtn} onPress={handleGenerateOtp}>
-                  <Ionicons name="refresh-outline" size={14} color={Colors.textTertiary} />
-                  <Text style={styles.regenBtnTxt}>Regenerate</Text>
-                </TouchableOpacity>
+                <Text style={[styles.reportLabel, { marginTop: Spacing.md }]}>Care notes</Text>
+                <Text style={styles.reportBody}>{visit.care_notes}</Text>
               </>
             )}
+            <TouchableOpacity
+              style={styles.rateRow}
+              onPress={() =>
+                router.push({ pathname: '/visit-success/[id]', params: { id: booking.id } })
+              }
+              testID="rate-visit"
+            >
+              <MaterialCommunityIcons
+                name={visit.rating_by_consumer ? 'star' : 'star-outline'}
+                size={18}
+                color={Colors.warning}
+              />
+              <Text style={styles.rateTxt}>
+                {visit.rating_by_consumer
+                  ? `You rated this visit ${visit.rating_by_consumer}/5`
+                  : 'Rate this visit'}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textTertiary} />
+            </TouchableOpacity>
           </View>
         )}
 
+        {/* ----------------------------------------------- cancellation --- */}
+        {showCancel && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Cancel this booking</Text>
+            {cancellable ? (
+              <>
+                <Text style={styles.cancelHint}>
+                  {booking.paid
+                    ? 'You’ll be refunded in full to your original payment method.'
+                    : 'No charge will be made.'}
+                </Text>
+                <GradientButton
+                  title={booking.paid ? 'Cancel & request refund' : 'Cancel booking'}
+                  variant="outline"
+                  loading={busy}
+                  onPress={confirmCancel}
+                  style={{ marginTop: Spacing.md }}
+                  testID="cancel-booking"
+                />
+              </>
+            ) : (
+              <View style={styles.lockedRow}>
+                <Ionicons name="lock-closed" size={16} color={Colors.textSecondary} />
+                <Text style={styles.lockedTxt}>{CANCELLATION_CLOSED_MESSAGE}</Text>
+              </View>
+            )}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
-function StatusBadge({ status, inProgress, isCompleted }: { status: string; inProgress: boolean; isCompleted: boolean }) {
-  let color = Colors.textTertiary;
-  let bg = Colors.surfaceAlt;
-  let icon: any = 'time-outline';
-  let label = 'Scheduled';
-
-  if (isCompleted) { color = Colors.teal; bg = Colors.teal + '18'; icon = 'checkmark-circle-outline'; label = 'Completed'; }
-  else if (inProgress) { color = Colors.primary; bg = Colors.primary + '18'; icon = 'pulse-outline'; label = 'Visit in progress'; }
-  else if (status === 'active' || status === 'claimed') { color = '#8B5CF6'; bg = '#8B5CF6' + '18'; icon = 'person-outline'; label = 'Nurse assigned'; }
-
-  return (
-    <View style={[styles.statusBadge, { backgroundColor: bg }]}>
-      <Ionicons name={icon} size={18} color={color} />
-      <Text style={[styles.statusTxt, { color }]}>{label}</Text>
-    </View>
-  );
+function paymentLabel(b: Booking): string {
+  switch (b.paymentStatus) {
+    case 'captured':
+      return 'Paid';
+    case 'refunded':
+      return 'Refunded — allow 5–7 working days';
+    case 'partially_refunded':
+      return 'Partially refunded';
+    case 'failed':
+      return 'Payment failed — please try again';
+    case 'initiated':
+      return 'Payment in progress';
+    default:
+      return 'Awaiting payment';
+  }
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+const DetailRow: React.FC<{
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  children: React.ReactNode;
+}> = ({ icon, label, children }) => (
+  <View style={styles.detailRow}>
+    <Ionicons name={icon} size={16} color={Colors.textTertiary} style={{ marginTop: 2 }} />
+    <View style={{ flex: 1 }}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue}>{children}</Text>
+    </View>
+  </View>
+);
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  scroll: { padding: Spacing.lg, paddingBottom: 60, gap: Spacing.md },
-
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
+  errorTxt: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: Spacing.md,
+  },
   card: {
     backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
+    borderRadius: Radius.xl,
+    padding: Spacing.card,
+    marginBottom: Spacing.md,
     ...Shadows.card,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  cardLabel: { ...Typography.bodyBold, fontWeight: '400' as const, color: Colors.textSecondary, flex: 1 },
-
-  statusBadge: {
+  cardHead: { flexDirection: 'row', alignItems: 'flex-start' },
+  title: { ...Typography.h3, color: Colors.textPrimary },
+  sub: { ...Typography.small, color: Colors.textSecondary, marginTop: 4 },
+  infoRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
+    gap: 8,
+    alignItems: 'flex-start',
+    backgroundColor: Colors.warningBg,
+    padding: 12,
+    borderRadius: Radius.md,
+    marginTop: Spacing.md,
   },
-  statusTxt: { ...Typography.bodyBold, fontWeight: '600' as const },
-
-  trackingBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.teal + '18',
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-  },
-  trackingBtnTxt: { ...Typography.bodyBold, fontWeight: '600' as const, color: Colors.teal, flex: 1 },
-
-  summaryCard: {
+  infoTxt: { ...Typography.small, flex: 1, lineHeight: 18 },
+  divider: { height: 1, backgroundColor: Colors.divider, marginVertical: Spacing.md },
+  detailRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  detailLabel: { ...Typography.caption, color: Colors.textTertiary },
+  detailValue: { ...Typography.body, color: Colors.textPrimary, marginTop: 2 },
+  actionRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
+  action: {
+    flex: 1,
     backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    ...Shadows.card,
-  },
-  summaryLabel: { ...Typography.small, color: Colors.textTertiary, fontWeight: '600' as const, marginBottom: Spacing.md },
-  summaryTxt: { ...Typography.bodyBold, fontWeight: '400' as const, color: Colors.textPrimary, lineHeight: 22 },
-  summaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.md,
-    padding: Spacing.md,
-  },
-  summaryBtnTxt: { ...Typography.bodyBold, fontWeight: '600' as const, color: Colors.primary },
-
-  otpCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.md,
-    ...Shadows.card,
-    borderWidth: 1.5,
-    borderColor: Colors.teal + '33',
-  },
-  otpHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
-  otpIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: Colors.teal + '18',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  otpTitle: { ...Typography.h3, color: Colors.textPrimary },
-  otpSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-
-  genBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.teal,
     borderRadius: Radius.lg,
     paddingVertical: 14,
-  },
-  genBtnTxt: { ...Typography.bodyBold, color: '#fff', fontWeight: '700' as const },
-
-  otpExpiredTxt: { ...Typography.small, color: Colors.error, textAlign: 'center' },
-
-  otpLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.md, padding: Spacing.md },
-  otpLoadingTxt: { ...Typography.small, color: Colors.textSecondary },
-
-  otpInstructionTxt: { ...Typography.small, color: Colors.textSecondary, textAlign: 'center' },
-
-  otpDisplay: { flexDirection: 'row', justifyContent: 'center', gap: 12 },
-  otpDigitBox: {
-    width: 56,
-    height: 64,
-    borderRadius: 12,
-    backgroundColor: Colors.teal + '18',
-    borderWidth: 2,
-    borderColor: Colors.teal + '55',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 6,
+    ...Shadows.card,
   },
-  otpDigitHidden: { backgroundColor: Colors.surfaceAlt, borderColor: Colors.divider },
-  otpDigit: { fontSize: 28, fontWeight: '800' as const, color: Colors.teal },
-  otpDash: { width: 20, height: 2, backgroundColor: Colors.textTertiary + '66', borderRadius: 2 },
-
-  countdownRow: {
+  actionTxt: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
+  sectionTitle: { ...Typography.h4, color: Colors.textPrimary, marginBottom: Spacing.md },
+  amountRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  amountLabel: { ...Typography.body, color: Colors.textSecondary },
+  amount: { ...Typography.h2, color: Colors.textPrimary, fontWeight: '800' as const },
+  payStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  payStatusTxt: { ...Typography.small, fontWeight: '600' as const },
+  reportLabel: { ...Typography.caption, color: Colors.textTertiary },
+  reportBody: { ...Typography.body, color: Colors.textPrimary, marginTop: 4, lineHeight: 21 },
+  rateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
+    gap: 8,
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.divider,
   },
-  countdownLabel: { ...Typography.small, color: Colors.textTertiary },
-  countdownValue: { ...Typography.bodyBold, fontWeight: '700' as const, color: Colors.textPrimary, fontVariant: ['tabular-nums'] },
-
-  regenBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: Spacing.md,
-  },
-  regenBtnTxt: { ...Typography.small, color: Colors.textTertiary },
+  rateTxt: { ...Typography.body, color: Colors.textPrimary, flex: 1 },
+  cancelHint: { ...Typography.small, color: Colors.textSecondary, lineHeight: 18 },
+  lockedRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  lockedTxt: { ...Typography.small, color: Colors.textSecondary, flex: 1, lineHeight: 18 },
 });

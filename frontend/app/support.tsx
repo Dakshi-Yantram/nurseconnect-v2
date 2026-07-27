@@ -1,43 +1,102 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
+/**
+ * Help centre — FAQs published by Operations plus this user's support tickets.
+ *
+ * The FAQ list is fetched rather than hardcoded: Operations maintains it in
+ * the web portal, and the backend already filters to the right audience
+ * (consumer vs worker) based on who is asking.
+ */
+import React, { useCallback, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Linking,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../components/Header';
 import { OfflineBanner } from '../components/OfflineBanner';
-import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../constants/theme';
+import { GradientButton } from '../components/GradientButton';
+import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
+import {
+  supportService,
+  type Faq,
+  type SupportTicketOut,
+  type TicketStatus,
+} from '../services/support.service';
+import { relativeTime } from '../lib/format';
 
-const FAQS = [
-  { q: 'How do I cancel a booking?', a: 'Open the visit from My Visits and tap “Cancel”. Refunds are processed within 3-5 working days.' },
-  { q: 'How is the BPL subsidy applied?', a: 'If your account is BPL-verified, a 20-25% subsidy is automatically deducted from every booking total.' },
-  { q: 'Are nurses background verified?', a: 'Yes. Every nurse undergoes police verification, license checks and a 5-day in-house orientation.' },
-  { q: 'What if the nurse arrives late?', a: 'You receive automatic delay notifications. Visits delayed by 30+ mins are eligible for a 15% goodwill credit.' },
-  { q: 'How do I link my ABHA?', a: 'Go to Profile → ABHA records and follow the link. Your existing health records will sync automatically.' },
-];
+const STATUS_TONE: Record<TicketStatus, { bg: string; fg: string; label: string }> = {
+  open: { bg: Colors.warningBg, fg: Colors.warning, label: 'Open' },
+  in_progress: { bg: Colors.infoBg, fg: Colors.primary, label: 'In progress' },
+  resolved: { bg: Colors.successBg, fg: Colors.success, label: 'Resolved' },
+  closed: { bg: Colors.surfaceAlt, fg: Colors.textSecondary, label: 'Closed' },
+};
 
 export default function Support() {
   const router = useRouter();
-  const tickets = useStore((s) => s.tickets);
-  const [open, setOpen] = useState<number | null>(null);
+  const role = useStore((s) => s.role);
+  const [faqs, setFaqs] = useState<Faq[]>([]);
+  const [tickets, setTickets] = useState<SupportTicketOut[]>([]);
+  const [openFaq, setOpenFaq] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setError('');
+    // Load both independently so a failure in one doesn't blank the other.
+    const [faqRes, ticketRes] = await Promise.allSettled([
+      supportService.faqs(),
+      supportService.myTickets(),
+    ]);
+    if (faqRes.status === 'fulfilled') setFaqs(faqRes.value);
+    if (ticketRes.status === 'fulfilled') setTickets(ticketRes.value);
+    if (faqRes.status === 'rejected' && ticketRes.status === 'rejected') {
+      setError('Could not reach the help centre. Check your connection and try again.');
+    }
+    setLoading(false);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
 
   return (
     <SafeAreaView style={styles.safe} testID="support-screen" edges={['top']}>
       <OfflineBanner />
-      <Header title="Help & Support" />
-      <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 60 }}>
-        {/* Emergency banner */}
-        <LinearGradient
-          colors={['#FEE2E2', '#FECACA'] as any}
-          style={styles.emergency}
-        >
+      <Header
+        title="Help & support"
+        fallbackHref={role === 'nurse' ? '/(nurse)/profile' : '/(family)/profile'}
+      />
+
+      <ScrollView
+        contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 60 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* ------------------------------------------------- emergency --- */}
+        <LinearGradient colors={['#FEE2E2', '#FECACA'] as any} style={styles.emergency}>
           <View style={styles.emergencyIcon}>
             <Ionicons name="alert" size={22} color="#fff" />
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={styles.emergencyTitle}>Medical emergency?</Text>
-            <Text style={styles.emergencySub}>Call 108 immediately for ambulance</Text>
+            <Text style={styles.emergencySub}>Call 108 immediately for an ambulance</Text>
           </View>
           <TouchableOpacity
             style={styles.emergencyBtn}
@@ -48,96 +107,99 @@ export default function Support() {
           </TouchableOpacity>
         </LinearGradient>
 
-        {/* Contact options */}
-        <Text style={styles.section}>Get in touch</Text>
-        <View style={styles.contactRow}>
-          <TouchableOpacity
-            style={styles.contactCard}
-            onPress={() => Linking.openURL('tel:18002221234')}
-            testID="contact-call"
-          >
-            <View style={[styles.contactIcon, { backgroundColor: Colors.successBg }]}>
-              <Ionicons name="call" size={20} color={Colors.success} />
-            </View>
-            <Text style={styles.contactLabel}>Call us</Text>
-            <Text style={styles.contactSub}>1800-222-1234</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.contactCard}
-            onPress={() => Linking.openURL('https://wa.me/911800222123')}
-            testID="contact-whatsapp"
-          >
-            <View style={[styles.contactIcon, { backgroundColor: '#DCFCE7' }]}>
-              <FontAwesome5 name="whatsapp" size={18} color="#16A34A" />
-            </View>
-            <Text style={styles.contactLabel}>WhatsApp</Text>
-            <Text style={styles.contactSub}>9am-9pm</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.contactRow}>
-          <TouchableOpacity
-            style={styles.contactCard}
-            onPress={() => router.push('/support/raise')}
-            testID="contact-ticket"
-          >
-            <View style={[styles.contactIcon, { backgroundColor: Colors.warningBg }]}>
-              <MaterialCommunityIcons name="ticket-confirmation" size={20} color={Colors.warning} />
-            </View>
-            <Text style={styles.contactLabel}>Raise a ticket</Text>
-            <Text style={styles.contactSub}>Get tracked support</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.contactCard}
-            onPress={() => Alert.alert('Live chat', 'A care expert will be with you shortly')}
-            testID="contact-chat"
-          >
-            <View style={[styles.contactIcon, { backgroundColor: Colors.infoBg }]}>
-              <Ionicons name="chatbubbles" size={20} color={Colors.primary} />
-            </View>
-            <Text style={styles.contactLabel}>Live chat</Text>
-            <Text style={styles.contactSub}>Avg. wait 2 mins</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* My tickets */}
-        <Text style={styles.section}>My tickets</Text>
-        {tickets.length === 0 ? (
-          <Text style={styles.empty}>No tickets yet</Text>
-        ) : (
-          tickets.map((t) => (
-            <TouchableOpacity
-              key={t.id}
-              style={styles.ticketRow}
-              onPress={() => router.push({ pathname: '/support/ticket/[id]', params: { id: t.id } })}
-              testID={`ticket-${t.id}`}
-            >
-              <View style={[styles.ticketDot, { backgroundColor: t.status === 'resolved' ? Colors.success : t.status === 'in_progress' ? Colors.warning : Colors.primary }]} />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.ticketTitle} numberOfLines={1}>{t.subject}</Text>
-                <Text style={styles.ticketSub}>#{t.id.toUpperCase()} · {t.createdAt}</Text>
-              </View>
-              <Text style={[styles.ticketStatus, { color: t.status === 'resolved' ? Colors.success : t.status === 'in_progress' ? Colors.warning : Colors.primary }]}>
-                {t.status.replace('_', ' ')}
-              </Text>
-            </TouchableOpacity>
-          ))
+        {!!error && (
+          <View style={styles.errorCard}>
+            <Ionicons name="cloud-offline-outline" size={18} color={Colors.danger} />
+            <Text style={styles.errorTxt}>{error}</Text>
+          </View>
         )}
 
-        {/* FAQ */}
-        <Text style={styles.section}>FAQs</Text>
-        {FAQS.map((f, i) => (
-          <View key={i} style={styles.faqCard}>
-            <TouchableOpacity
-              style={styles.faqHead}
-              onPress={() => setOpen(open === i ? null : i)}
-              testID={`faq-${i}`}
-            >
-              <Text style={styles.faqQ}>{f.q}</Text>
-              <Ionicons name={open === i ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
-            </TouchableOpacity>
-            {open === i && <Text style={styles.faqA}>{f.a}</Text>}
+        {/* --------------------------------------------------- tickets --- */}
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Your requests</Text>
+          <TouchableOpacity onPress={() => router.push('/support/raise')} testID="raise-ticket">
+            <Text style={styles.link}>New request</Text>
+          </TouchableOpacity>
+        </View>
+
+        {loading ? (
+          <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.lg }} />
+        ) : tickets.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTxt}>
+              No open requests. If something isn’t right with a visit, a payment or your account,
+              raise a request and our support team will pick it up.
+            </Text>
+            <GradientButton
+              title="Raise a request"
+              variant="outline"
+              fullWidth={false}
+              onPress={() => router.push('/support/raise')}
+              style={{ marginTop: Spacing.md, alignSelf: 'flex-start' }}
+            />
           </View>
-        ))}
+        ) : (
+          tickets.map((t) => {
+            const tone = STATUS_TONE[t.status] ?? STATUS_TONE.open;
+            return (
+              <TouchableOpacity
+                key={t.id}
+                style={styles.ticketCard}
+                onPress={() =>
+                  router.push({ pathname: '/support/ticket/[id]', params: { id: t.id } })
+                }
+                testID={`ticket-${t.id}`}
+              >
+                <View style={styles.ticketHead}>
+                  <Text style={styles.ticketSubject} numberOfLines={1}>
+                    {t.subject}
+                  </Text>
+                  <View style={[styles.statusChip, { backgroundColor: tone.bg }]}>
+                    <Text style={[styles.statusTxt, { color: tone.fg }]}>{tone.label}</Text>
+                  </View>
+                </View>
+                <Text style={styles.ticketMeta}>
+                  {t.ticket_ref} · raised {relativeTime(t.created_at)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })
+        )}
+
+        {/* ------------------------------------------------------ FAQs --- */}
+        <Text style={[styles.sectionTitle, { marginTop: Spacing.xl, marginBottom: Spacing.sm }]}>
+          Frequently asked
+        </Text>
+
+        {loading ? null : faqs.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTxt}>
+              No help articles have been published yet. Raise a request and we’ll answer directly.
+            </Text>
+          </View>
+        ) : (
+          faqs.map((f) => {
+            const isOpen = openFaq === f.id;
+            return (
+              <TouchableOpacity
+                key={f.id}
+                style={styles.faqCard}
+                onPress={() => setOpenFaq(isOpen ? null : f.id)}
+                testID={`faq-${f.id}`}
+              >
+                <View style={styles.faqHead}>
+                  <Text style={styles.faqQ}>{f.question}</Text>
+                  <Ionicons
+                    name={isOpen ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={Colors.textTertiary}
+                  />
+                </View>
+                {isOpen && <Text style={styles.faqA}>{f.answer}</Text>}
+              </TouchableOpacity>
+            );
+          })
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -145,25 +207,76 @@ export default function Support() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  emergency: { flexDirection: 'row', alignItems: 'center', borderRadius: Radius.xl, padding: 14, ...Shadows.card },
-  emergencyIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: Colors.error, alignItems: 'center', justifyContent: 'center' },
-  emergencyTitle: { ...Typography.bodyBold, color: '#991B1B' },
-  emergencySub: { ...Typography.small, color: '#B91C1C', marginTop: 2 },
-  emergencyBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.error, alignItems: 'center', justifyContent: 'center' },
-  section: { ...Typography.h3, color: Colors.textPrimary, marginTop: 24, marginBottom: 12 },
-  contactRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  contactCard: { flex: 1, backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, ...Shadows.card },
-  contactIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  contactLabel: { ...Typography.bodyBold, color: Colors.textPrimary, marginTop: 8 },
-  contactSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  ticketRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, marginBottom: 8, ...Shadows.card },
-  ticketDot: { width: 8, height: 8, borderRadius: 4 },
-  ticketTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
-  ticketSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  ticketStatus: { ...Typography.caption, fontWeight: '700' as const, textTransform: 'capitalize' },
-  faqCard: { backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, marginBottom: 8 },
-  faqHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  emergency: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: Radius.xl,
+  },
+  emergencyIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emergencyTitle: { ...Typography.bodyBold, color: Colors.danger },
+  emergencySub: { ...Typography.small, color: Colors.danger, marginTop: 2 },
+  emergencyBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorCard: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    backgroundColor: Colors.errorBg,
+    padding: 12,
+    borderRadius: Radius.md,
+    marginTop: Spacing.md,
+  },
+  errorTxt: { ...Typography.small, color: Colors.danger, flex: 1 },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
+  },
+  sectionTitle: { ...Typography.h4, color: Colors.textPrimary },
+  link: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
+  emptyCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    ...Shadows.card,
+  },
+  emptyTxt: { ...Typography.small, color: Colors.textSecondary, lineHeight: 18 },
+  ticketCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    marginBottom: Spacing.sm,
+    ...Shadows.card,
+  },
+  ticketHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ticketSubject: { ...Typography.bodyBold, color: Colors.textPrimary, flex: 1 },
+  statusChip: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: Radius.pill },
+  statusTxt: { ...Typography.caption, fontWeight: '700' as const },
+  ticketMeta: { ...Typography.caption, color: Colors.textTertiary, marginTop: 6 },
+  faqCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    marginBottom: Spacing.sm,
+    ...Shadows.card,
+  },
+  faqHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   faqQ: { ...Typography.bodyBold, color: Colors.textPrimary, flex: 1 },
-  faqA: { ...Typography.body, color: Colors.textSecondary, marginTop: 8, lineHeight: 22 },
-  empty: { ...Typography.small, color: Colors.textTertiary, textAlign: 'center', padding: 16 },
+  faqA: { ...Typography.small, color: Colors.textSecondary, marginTop: 10, lineHeight: 19 },
 });

@@ -5,8 +5,7 @@
  * shapes (question types, required flags, blocking rules) come from the
  * backend response — nothing is hardcoded here.
  */
-import { api, API_BASE } from '../lib/api';
-import { authStorage } from '../lib/auth-storage';
+import { api } from '../lib/api';
 
 export type WorkflowQuestionType =
   | 'text'
@@ -149,33 +148,23 @@ export const careWorkflowService = {
       `/care/workflow/${bookingId}/completion-status`,
     ),
 
-  /** Multipart upload — returns a public /api/uploads/... URL. */
-  uploadDocumentationFile: async (
+  /**
+   * Multipart upload — returns a public /api/uploads/... URL.
+   *
+   * Goes through `api.upload` so the request picks up the shared auth header
+   * and 401-refresh handling; the previous hand-rolled `fetch` bypassed the
+   * interceptor, so an expired token failed the upload instead of refreshing.
+   */
+  uploadDocumentationFile: (
     bookingId: string,
     fieldId: string,
     fileUri: string,
     fileName?: string,
     mimeType: string = 'image/jpeg',
-  ): Promise<{ file_url: string; field_id: string; size_bytes: number }> => {
-    const form = new FormData();
-    form.append('field_id', fieldId);
-    // React Native FormData accepts {uri, name, type}
-    form.append('file', {
-      // @ts-expect-error RN polyfill shape
-      uri: fileUri,
-      name: fileName || `${fieldId}.jpg`,
-      type: mimeType,
-    });
-    const token = await authStorage.getAccessToken();
-    const res = await fetch(`${API_BASE}/care/workflow/${bookingId}/documentation/file`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body: form as any,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Upload failed (${res.status}): ${text}`);
-    }
-    return res.json();
-  },
+  ): Promise<{ file_url: string; field_id: string; size_bytes: number }> =>
+    api.upload<{ file_url: string; field_id: string; size_bytes: number }>(
+      `/care/workflow/${bookingId}/documentation/file`,
+      { uri: fileUri, name: fileName || `${fieldId}.jpg`, type: mimeType },
+      { field_id: fieldId },
+    ),
 };

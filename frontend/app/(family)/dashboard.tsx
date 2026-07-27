@@ -1,364 +1,342 @@
-import React from 'react';
+/**
+ * Consumer home.
+ *
+ * Surfaces whatever needs attention first — a visit in progress, a booking
+ * awaiting payment, a nurse being re-matched — then the next upcoming visit.
+ * Bucketing uses the shared backend-status rules so this agrees with the
+ * Visits tab and with the web portal.
+ */
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
 import { GradientBanner } from '../../components/GradientBanner';
 import { BookingCard } from '../../components/BookingCard';
+import { VisitOtpChip } from '../../components/VisitOtpChip';
 import { OfflineBanner } from '../../components/OfflineBanner';
+import { AsyncBoundary } from '../../components/AsyncBoundary';
+import { bucketBookings } from '../../lib/booking-domain';
+import { inr } from '../../lib/format';
 
 export default function FamilyDashboard() {
   const router = useRouter();
   const user = useStore((s) => s.user);
   const bookings = useStore((s) => s.bookings);
+  const patients = useStore((s) => s.patients);
+  const addresses = useStore((s) => s.addresses);
   const notifications = useStore((s) => s.notifications);
+  const state = useStore((s) => s.loadState.bookings);
+  const bootstrapFamily = useStore((s) => s.bootstrapFamily);
+  const refreshBookings = useStore((s) => s.refreshBookings);
+
+  const [refreshing, setRefreshing] = useState(false);
   const unread = notifications.filter((n) => !n.read).length;
 
-  const upcoming = bookings.filter((b) => b.status !== 'completed' && b.status !== 'cancelled');
-  const totalSubsidy = bookings.reduce((s, b) => s + b.subsidy, 0);
-  const totalSpent = bookings.reduce((s, b) => s + b.netCost, 0);
+  useFocusEffect(
+    useCallback(() => {
+      refreshBookings().catch(() => {});
+    }, [refreshBookings]),
+  );
+
+  const buckets = useMemo(() => bucketBookings(bookings), [bookings]);
+  const active = buckets.inCare[0] ?? null;
+  const nextUp = buckets.upcoming[0] ?? null;
+  const featured = active ?? nextUp;
+  const awaitingPayment = buckets.upcoming.filter((b) => b.rawStatus === 'pending_payment');
+
+  const completed = buckets.completed.filter((b) => b.rawStatus === 'completed');
+  const totalSpent = completed.filter((b) => b.paid).reduce((s, b) => s + b.netCost, 0);
+
+  // Booking needs both a patient and an address, so prompt for whichever is
+  // missing rather than letting the user hit a dead end mid-flow.
+  const setupNeeded = patients.length === 0 || addresses.length === 0;
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await bootstrapFamily().catch(() => {});
+    setRefreshing(false);
+  };
 
   const quickActions = [
-    {
-      icon: 'medical',
-      label: 'Book Nurse',
-      color: Colors.primary,
-      onPress: () => router.push('/care-types'),
-    },
-    {
-      icon: 'card',
-      label: 'Payments',
-      color: Colors.teal,
-      onPress: () => router.push('/(family)/payments'),
-    },
-    {
-      icon: 'heart',
-      label: 'Care Notes',
-      color: Colors.error,
-      onPress: () => router.push('/(family)/visits'),
-    },
-    {
-      icon: 'document-text',
-      label: 'ABHA',
-      color: Colors.accent,
-      onPress: () => router.push('/abha'),
-    },
-  ] as const;
+    { icon: 'medical' as const, label: 'Book care', onPress: () => router.push('/care-types') },
+    { icon: 'people' as const, label: 'Patients', onPress: () => router.push('/patients') },
+    { icon: 'card' as const, label: 'Payments', onPress: () => router.push('/(family)/payments') },
+    { icon: 'help-buoy' as const, label: 'Help', onPress: () => router.push('/support') },
+  ];
 
   return (
     <SafeAreaView style={styles.safe} testID="family-dashboard" edges={['top']}>
       <OfflineBanner />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
-        {/* Greeting */}
-        <View style={styles.greetRow}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* ---------------------------------------------------- header --- */}
+        <View style={styles.header}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.hello}>Hello, {user?.name?.split(' ')[0] || 'there'} 👋</Text>
-            <Text style={styles.subHello}>How can we care for your family today?</Text>
+            <Text style={styles.greeting}>{greeting()}</Text>
+            <Text style={styles.name}>{user?.name || 'Welcome'}</Text>
           </View>
           <TouchableOpacity
-            style={styles.notifBtn}
+            style={styles.bell}
             onPress={() => router.push('/notifications')}
-            testID="notifications-bell"
+            testID="dashboard-notifications"
           >
             <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
             {unread > 0 && (
-              <View style={styles.notifDot}>
-                <Text style={styles.notifDotTxt}>{unread}</Text>
+              <View style={styles.badge}>
+                <Text style={styles.badgeTxt}>{unread > 9 ? '9+' : unread}</Text>
               </View>
             )}
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarBtn}
-            onPress={() => router.push('/(family)/profile')}
-            testID="profile-avatar"
-          >
-            <Image
-              source={{
-                uri:
-                  user?.avatar ||
-                  'https://images.unsplash.com/photo-1633332755192-727a05c4013d?auto=format&fit=crop&w=200&q=80',
-              }}
-              style={styles.avatar}
-            />
-          </TouchableOpacity>
         </View>
 
-        {/* Hero stats */}
-        <LinearGradient
-          colors={Gradients.teal as any}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroLabel}>This month’s care</Text>
-            <Text style={styles.heroValue}>₹{totalSpent.toLocaleString('en-IN')}</Text>
-            <View style={styles.heroPill}>
-              <FontAwesome5 name="hand-holding-heart" size={11} color="#fff" />
-              <Text style={styles.heroPillTxt}>
-                ₹{totalSubsidy} saved via BPL subsidy
+        {/* ------------------------------------------------ setup nudge --- */}
+        {setupNeeded && (
+          <TouchableOpacity
+            style={styles.setupCard}
+            onPress={() => router.push(patients.length === 0 ? '/patients' : '/addresses')}
+            testID="dashboard-setup"
+          >
+            <Ionicons name="alert-circle" size={20} color={Colors.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.setupTitle}>
+                {patients.length === 0 ? 'Add a patient' : 'Add a service address'}
+              </Text>
+              <Text style={styles.setupSub}>
+                {patients.length === 0
+                  ? 'Tell us who you’re booking care for to get started.'
+                  : 'We need an address to find nurses near you.'}
               </Text>
             </View>
-          </View>
-          <View style={styles.heroDivider} />
-          <View style={{ flex: 1, alignItems: 'flex-end' }}>
-            <Text style={styles.heroLabel}>Care hours</Text>
-            <Text style={styles.heroValue}>
-              {bookings.reduce((s, b) => s + b.duration, 0)}h
-            </Text>
-            <Text style={[styles.heroPillTxt, { color: 'rgba(255,255,255,0.8)' }]}>
-              Across {bookings.length} visits
-            </Text>
-          </View>
-        </LinearGradient>
+            <Ionicons name="chevron-forward" size={18} color={Colors.warning} />
+          </TouchableOpacity>
+        )}
 
-        {/* Quick actions */}
-        <Text style={styles.sectionTitle}>Quick actions</Text>
-        <View style={styles.qaRow}>
+        {/* -------------------------------------------- payment pending --- */}
+        {awaitingPayment.map((b) => (
+          <TouchableOpacity
+            key={b.id}
+            style={styles.payCard}
+            onPress={() => router.push({ pathname: '/payment', params: { bookingId: b.id } })}
+            testID={`dashboard-pay-${b.id}`}
+          >
+            <Ionicons name="card" size={20} color={Colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.payTitle}>Complete payment to confirm</Text>
+              <Text style={styles.paySub}>
+                {b.careTitle} · {inr(b.netCost)} — a nurse is only assigned once payment succeeds.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.primary} />
+          </TouchableOpacity>
+        ))}
+
+        {/* ------------------------------------------------ live banner --- */}
+        {!!active && (
+          <View style={{ paddingHorizontal: Spacing.lg, marginBottom: Spacing.md }}>
+            <GradientBanner
+              title="Visit in progress"
+              subtitle={`${active.careTitle} with ${active.nurseName}`}
+              ctaTitle="Follow live"
+              icon="pulse-outline"
+              onPress={() =>
+                router.push({ pathname: '/tracking/[id]', params: { id: active.id } })
+              }
+            />
+          </View>
+        )}
+
+        {/* ---------------------------------------------- quick actions --- */}
+        <View style={styles.actionsRow}>
           {quickActions.map((a) => (
             <TouchableOpacity
               key={a.label}
-              style={styles.qaCard}
+              style={styles.actionCard}
               onPress={a.onPress}
-              testID={`quick-${a.label.toLowerCase().replace(/\s+/g, '-')}`}
+              testID={`quick-${a.label}`}
             >
-              <View style={[styles.qaIcon, { backgroundColor: a.color + '15' }]}>
-                <Ionicons name={a.icon as any} size={20} color={a.color} />
+              <View style={styles.actionIcon}>
+                <Ionicons name={a.icon} size={20} color={Colors.primary} />
               </View>
-              <Text style={styles.qaLabel}>{a.label}</Text>
+              <Text style={styles.actionLabel}>{a.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* Upcoming */}
-        <View style={styles.row}>
-          <Text style={styles.sectionTitle}>Active bookings</Text>
-          <TouchableOpacity onPress={() => router.push('/(family)/visits')}>
-            <Text style={styles.seeAll}>See all</Text>
-          </TouchableOpacity>
-        </View>
-
-        {upcoming.length === 0 ? (
-          <GradientBanner
-            title="No active visits"
-            subtitle="Book a verified nurse for your loved ones"
-            ctaTitle="Book"
-            icon="add-circle-outline"
-            onPress={() => router.push('/care-types')}
-          />
-        ) : (
-          upcoming.slice(0, 2).map((b) => (
-            <BookingCard
-              key={b.id}
-              booking={b}
-              onPress={() =>
-                b.status === 'enroute' || b.status === 'active'
-                  ? router.push({ pathname: '/tracking/[id]', params: { id: b.id } })
-                  : router.push({ pathname: '/visit/[id]', params: { id: b.id } })
-              }
-            />
-          ))
+        {/* --------------------------------------------------- summary --- */}
+        {completed.length > 0 && (
+          <View style={styles.statsRow}>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{completed.length}</Text>
+              <Text style={styles.statLabel}>Visits completed</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{inr(totalSpent)}</Text>
+              <Text style={styles.statLabel}>Total spent</Text>
+            </View>
+          </View>
         )}
 
-        {/* ABHA banner */}
-        <View style={{ marginTop: 8 }}>
-          <GradientBanner
-            title="Link your ABHA Health ID"
-            subtitle="Seamlessly access all your health records"
-            ctaTitle="Link"
-            icon="shield-checkmark-outline"
-            onPress={() => router.push('/abha')}
-          />
+        {/* --------------------------------------------------- next up --- */}
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>{active ? 'Happening now' : 'Your next visit'}</Text>
+          {buckets.upcoming.length + buckets.inCare.length > 1 && (
+            <TouchableOpacity onPress={() => router.push('/(family)/visits')}>
+              <Text style={styles.seeAll}>See all</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Recent activity */}
-        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Recent activity</Text>
-        {notifications.slice(0, 3).map((n) => (
-          <TouchableOpacity
-            key={n.id}
-            style={styles.activity}
-            onPress={() => router.push('/notifications')}
+        <View style={{ paddingHorizontal: Spacing.lg }}>
+          <AsyncBoundary
+            state={state}
+            isEmpty={!featured}
+            emptyTitle="No visits booked"
+            emptyDescription="Book a care package and we’ll match you with a verified nurse nearby."
+            emptyIcon="calendar-outline"
+            emptyCtaTitle="Book care"
+            onEmptyCtaPress={() => router.push('/care-types')}
+            onRetry={() => refreshBookings()}
           >
-            <View
-              style={[
-                styles.activityIcon,
-                { backgroundColor: n.read ? Colors.surfaceAlt : Colors.infoBg },
-              ]}
-            >
-              <Ionicons
-                name={
-                  n.type === 'payment'
-                    ? 'card-outline'
-                    : n.type === 'booking'
-                    ? 'medkit-outline'
-                    : 'information-circle-outline'
+            {!!featured && (
+              <BookingCard
+                booking={featured}
+                onPress={() =>
+                  router.push({ pathname: '/visit/[id]', params: { id: featured.id } })
                 }
-                size={18}
-                color={Colors.primary}
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.actTitle} numberOfLines={1}>
-                {n.title}
-              </Text>
-              <Text style={styles.actBody} numberOfLines={1}>
-                {n.body}
-              </Text>
-            </View>
-            <Text style={styles.actTime}>{n.time}</Text>
-          </TouchableOpacity>
-        ))}
+              >
+                <VisitOtpChip bookingId={featured.id} status={featured.rawStatus} />
+              </BookingCard>
+            )}
+          </AsyncBoundary>
+        </View>
       </ScrollView>
-
-      {/* Floating Book button */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push('/care-types')}
-        testID="fab-book-nurse"
-      >
-        <LinearGradient
-          colors={Gradients.primary as any}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.fabGradient}
-        >
-          <MaterialCommunityIcons name="plus" size={24} color="#fff" />
-          <Text style={styles.fabTxt}>Book Nurse</Text>
-        </LinearGradient>
-      </TouchableOpacity>
     </SafeAreaView>
   );
 }
 
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  greetRow: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingTop: 12,
-    paddingBottom: 18,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
   },
-  hello: { ...Typography.h2, color: Colors.textPrimary, fontWeight: '800' as const },
-  subHello: { ...Typography.small, color: Colors.textSecondary, marginTop: 4 },
-  notifBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  greeting: { ...Typography.small, color: Colors.textSecondary },
+  name: { ...Typography.h2, color: Colors.textPrimary, marginTop: 2 },
+  bell: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 8,
     ...Shadows.card,
   },
-  notifDot: {
+  badge: {
     position: 'absolute',
     top: 6,
     right: 6,
     minWidth: 16,
     height: 16,
+    paddingHorizontal: 3,
     borderRadius: 8,
     backgroundColor: Colors.error,
-    paddingHorizontal: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  notifDotTxt: { color: '#fff', fontSize: 9, fontWeight: '800' as const },
-  avatarBtn: { width: 40, height: 40, borderRadius: 20, overflow: 'hidden' },
-  avatar: { width: 40, height: 40, borderRadius: 20 },
-  hero: {
+  badgeTxt: { color: '#fff', fontSize: 9, fontWeight: '800' as const },
+  setupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     marginHorizontal: Spacing.lg,
-    borderRadius: Radius.xl,
-    padding: 20,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.warningBg,
+    borderRadius: Radius.lg,
+    padding: 14,
+  },
+  setupTitle: { ...Typography.bodyBold, color: Colors.warning },
+  setupSub: { ...Typography.small, color: Colors.warning, marginTop: 2, lineHeight: 17 },
+  payCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    ...Shadows.floating,
-  },
-  heroLabel: { ...Typography.caption, color: 'rgba(255,255,255,0.85)' },
-  heroValue: { ...Typography.h1, color: '#fff', fontWeight: '800' as const, marginTop: 4 },
-  heroPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: Radius.pill,
-    alignSelf: 'flex-start',
-    marginTop: 8,
-    gap: 6,
-  },
-  heroPillTxt: { ...Typography.small, color: '#fff', fontWeight: '600' as const, marginTop: 4 },
-  heroDivider: { width: 1, height: 60, backgroundColor: 'rgba(255,255,255,0.2)', marginHorizontal: 16 },
-  sectionTitle: {
-    ...Typography.h3,
-    color: Colors.textPrimary,
+    gap: 12,
     marginHorizontal: Spacing.lg,
-    marginTop: 24,
-    marginBottom: 12,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.infoBg,
+    borderRadius: Radius.lg,
+    padding: 14,
   },
-  row: {
+  payTitle: { ...Typography.bodyBold, color: Colors.primary },
+  paySub: { ...Typography.small, color: Colors.primary, marginTop: 2, lineHeight: 17 },
+  actionsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: Spacing.sm,
     paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
   },
-  seeAll: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const, marginTop: 24, marginBottom: 12 },
-  qaRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: Spacing.md },
-  qaCard: {
+  actionCard: {
     flex: 1,
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
-    padding: 14,
+    paddingVertical: 14,
     alignItems: 'center',
-    margin: 4,
+    gap: 8,
     ...Shadows.card,
   },
-  qaIcon: {
-    width: 44,
-    height: 44,
+  actionIcon: {
+    width: 40,
+    height: 40,
     borderRadius: 14,
+    backgroundColor: Colors.infoBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  qaLabel: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const, marginTop: 8, textAlign: 'center' },
-  activity: {
+  actionLabel: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600' as const },
+  statsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    gap: Spacing.sm,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 12,
+    marginTop: Spacing.md,
   },
-  activityIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  actTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
-  actBody: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  actTime: { ...Typography.caption, color: Colors.textTertiary },
-  fab: {
-    position: 'absolute',
-    right: Spacing.md,
-    bottom: Spacing.lg,
-    borderRadius: Radius.pill,
-    overflow: 'hidden',
+  statCard: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    ...Shadows.card,
   },
-  fabGradient: {
+  statValue: { ...Typography.h3, color: Colors.textPrimary, fontWeight: '800' as const },
+  statLabel: { ...Typography.caption, color: Colors.textSecondary, marginTop: 4 },
+  sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    gap: 8,
-    ...Shadows.floating,
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
-  fabTxt: { color: '#fff', ...Typography.bodyBold, fontWeight: '700' as const },
+  sectionTitle: { ...Typography.h4, color: Colors.textPrimary },
+  seeAll: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
 });
-
-// Wrap families dashboard with bookings dependency
-const _bookings: any[] = [];
-const _setBookings = (_b: any[]) => {};

@@ -1,105 +1,176 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
+/**
+ * Training modules published to this care professional.
+ *
+ * Completion here is what feeds the qualification gate, so mandatory modules
+ * are called out — an outstanding mandatory module can be the reason a nurse
+ * can't take on a care package.
+ */
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../components/Header';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { AsyncBoundary } from '../components/AsyncBoundary';
 import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../constants/theme';
-import { useStore } from '../store';
+import { trainingService, type TrainingModuleListItem } from '../services/training.service';
+import { formatDuration } from '../lib/format';
 
 export default function Training() {
   const router = useRouter();
-  const courses = useStore((s) => s.courses);
-  const [tab, setTab] = useState<'courses' | 'certs'>('courses');
+  const [modules, setModules] = useState<TrainingModuleListItem[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
 
-  const completed = courses.filter((c) => c.status === 'completed').length;
-  const inProgress = courses.filter((c) => c.status === 'in_progress').length;
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      setModules(await trainingService.list());
+    } catch (e: any) {
+      setError(e?.message || 'Could not load training modules');
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  const { completed, mandatoryOutstanding } = useMemo(
+    () => ({
+      completed: modules.filter((m) => m.completed).length,
+      mandatoryOutstanding: modules.filter((m) => m.is_mandatory && !m.completed).length,
+    }),
+    [modules],
+  );
 
   return (
     <SafeAreaView style={styles.safe} testID="training-screen" edges={['top']}>
       <OfflineBanner />
-      <Header title="Training" />
-      <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40 }}>
-        <LinearGradient colors={Gradients.teal as any} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
-          <Text style={styles.heroLabel}>Continuous learning</Text>
-          <Text style={styles.heroVal}>{completed} / {courses.length} courses completed</Text>
-          <View style={styles.heroRow}>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroNum}>{completed}</Text>
-              <Text style={styles.heroLab}>Completed</Text>
+      <Header
+        title="Training"
+        fallbackHref="/(nurse)/profile"
+        rightIcon="ribbon-outline"
+        onRightPress={() => router.push('/certificates')}
+      />
+
+      <ScrollView
+        contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 60 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={async () => {
+              setRefreshing(true);
+              await load();
+              setRefreshing(false);
+            }}
+          />
+        }
+      >
+        <LinearGradient
+          colors={Gradients.teal as any}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <Text style={styles.heroLabel}>Your progress</Text>
+          <Text style={styles.heroVal}>
+            {completed} of {modules.length} module{modules.length === 1 ? '' : 's'} completed
+          </Text>
+          {mandatoryOutstanding > 0 && (
+            <View style={styles.heroWarn}>
+              <Ionicons name="alert-circle" size={13} color="#fff" />
+              <Text style={styles.heroWarnTxt}>
+                {mandatoryOutstanding} mandatory module{mandatoryOutstanding === 1 ? '' : 's'}{' '}
+                outstanding
+              </Text>
             </View>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroNum}>{inProgress}</Text>
-              <Text style={styles.heroLab}>In progress</Text>
-            </View>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroNum}>3</Text>
-              <Text style={styles.heroLab}>Certificates</Text>
-            </View>
-          </View>
+          )}
         </LinearGradient>
 
-        <View style={styles.tabs}>
-          <TouchableOpacity
-            onPress={() => setTab('courses')}
-            style={[styles.tab, tab === 'courses' && styles.tabActive]}
-            testID="tab-courses"
-          >
-            <Text style={[styles.tabTxt, tab === 'courses' && { color: Colors.primary }]}>Courses</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setTab('certs')}
-            style={[styles.tab, tab === 'certs' && styles.tabActive]}
-            testID="tab-certs"
-          >
-            <Text style={[styles.tabTxt, tab === 'certs' && { color: Colors.primary }]}>Certificates</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={styles.linkCard}
+          onPress={() => router.push('/assessments')}
+          testID="training-assessments"
+        >
+          <View style={styles.linkIcon}>
+            <Ionicons name="clipboard" size={20} color={Colors.teal} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.linkTitle}>Assessments</Text>
+            <Text style={styles.linkSub}>Tests that unlock care packages</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
+        </TouchableOpacity>
 
-        {tab === 'courses' ? (
-          courses.map((c) => {
-            const pct = Math.round((c.completed / c.modules) * 100);
-            return (
-              <TouchableOpacity
-                key={c.id}
-                style={styles.courseCard}
-                onPress={() => router.push({ pathname: '/training/[id]', params: { id: c.id } })}
-                testID={`course-${c.id}`}
+        <Text style={styles.section}>Modules</Text>
+
+        <AsyncBoundary
+          state={{ loading: !loaded, loaded, error: error || null }}
+          isEmpty={modules.length === 0}
+          emptyTitle="No modules published yet"
+          emptyDescription="Training modules appear here once your clinical training team publishes them."
+          emptyIcon="school-outline"
+          onRetry={load}
+        >
+          {modules.map((m) => (
+            <TouchableOpacity
+              key={m.id}
+              style={styles.card}
+              onPress={() => router.push({ pathname: '/training/[id]', params: { id: m.id } })}
+              testID={`module-${m.id}`}
+            >
+              <View
+                style={[
+                  styles.cardIcon,
+                  { backgroundColor: m.completed ? Colors.successBg : '#CCFBF1' },
+                ]}
               >
-                <Image source={{ uri: c.thumbnail }} style={styles.thumb} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <View style={styles.row}>
-                    <View style={styles.catChip}>
-                      <Text style={styles.catChipTxt}>{c.category}</Text>
+                <Ionicons
+                  name={m.completed ? 'checkmark-circle' : 'play-circle'}
+                  size={22}
+                  color={m.completed ? Colors.success : Colors.teal}
+                />
+              </View>
+
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.cardTitle}>{m.title}</Text>
+                <Text style={styles.cardSub} numberOfLines={2}>
+                  {[m.category, formatDuration(m.duration_minutes)].filter(Boolean).join(' · ')}
+                </Text>
+                <View style={styles.tagRow}>
+                  {m.is_mandatory && (
+                    <View style={[styles.tag, { backgroundColor: Colors.warningBg }]}>
+                      <Text style={[styles.tagTxt, { color: Colors.warning }]}>Mandatory</Text>
                     </View>
-                    {c.status === 'completed' && (
-                      <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
-                    )}
-                  </View>
-                  <Text style={styles.courseTitle} numberOfLines={2}>{c.title}</Text>
-                  <Text style={styles.courseSub}>{c.modules} modules · {c.durationMins} mins</Text>
-                  <View style={styles.track}>
-                    <View style={[styles.fill, { width: `${pct}%` }]} />
-                  </View>
-                  <Text style={styles.coursePct}>{pct}% complete</Text>
+                  )}
+                  {m.completed && (
+                    <View style={[styles.tag, { backgroundColor: Colors.successBg }]}>
+                      <Text style={[styles.tagTxt, { color: Colors.success }]}>
+                        {m.passed === false ? 'Completed — quiz not passed' : 'Completed'}
+                      </Text>
+                    </View>
+                  )}
                 </View>
-              </TouchableOpacity>
-            );
-          })
-        ) : (
-          <TouchableOpacity onPress={() => router.push('/certificates')} style={styles.linkCard} testID="view-all-certs">
-            <View style={styles.linkIcon}>
-              <FontAwesome5 name="award" size={20} color={Colors.accent} />
-            </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.linkTitle}>Your certificates</Text>
-              <Text style={styles.linkSub}>3 active · 1 expiring soon · download anytime</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
-          </TouchableOpacity>
-        )}
+              </View>
+
+              <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
+            </TouchableOpacity>
+          ))}
+        </AsyncBoundary>
       </ScrollView>
     </SafeAreaView>
   );
@@ -107,29 +178,66 @@ export default function Training() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  hero: { borderRadius: Radius.xl, padding: 20, ...Shadows.floating },
+  hero: { borderRadius: Radius.xl, padding: Spacing.lg, ...Shadows.floating },
   heroLabel: { ...Typography.caption, color: 'rgba(255,255,255,0.85)' },
-  heroVal: { ...Typography.h2, color: '#fff', fontWeight: '800' as const, marginTop: 4 },
-  heroRow: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  heroBox: { flex: 1, backgroundColor: 'rgba(255,255,255,0.18)', padding: 10, borderRadius: Radius.md },
-  heroNum: { ...Typography.h3, color: '#fff', fontWeight: '800' as const },
-  heroLab: { ...Typography.caption, color: 'rgba(255,255,255,0.85)' },
-  tabs: { flexDirection: 'row', backgroundColor: Colors.surfaceAlt, borderRadius: Radius.lg, padding: 4, marginVertical: 16 },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.md },
-  tabActive: { backgroundColor: Colors.surface },
-  tabTxt: { ...Typography.small, color: Colors.textSecondary, fontWeight: '600' as const },
-  courseCard: { flexDirection: 'row', backgroundColor: Colors.surface, borderRadius: Radius.xl, padding: 12, marginBottom: 12, ...Shadows.card },
-  thumb: { width: 80, height: 80, borderRadius: Radius.md, backgroundColor: Colors.surfaceAlt },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  catChip: { backgroundColor: Colors.infoBg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.pill },
-  catChipTxt: { ...Typography.caption, color: Colors.primary, fontSize: 9 },
-  courseTitle: { ...Typography.bodyBold, color: Colors.textPrimary, marginTop: 4 },
-  courseSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  track: { height: 6, backgroundColor: Colors.surfaceAlt, borderRadius: 3, marginTop: 8 },
-  fill: { height: 6, backgroundColor: Colors.primary, borderRadius: 3 },
-  coursePct: { ...Typography.caption, color: Colors.textTertiary, marginTop: 4 },
-  linkCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, ...Shadows.card },
-  linkIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#FFF7ED', alignItems: 'center', justifyContent: 'center' },
+  heroVal: { ...Typography.h3, color: '#fff', fontWeight: '800' as const, marginTop: 4 },
+  heroWarn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.pill,
+    marginTop: Spacing.sm,
+  },
+  heroWarnTxt: { ...Typography.caption, color: '#fff', fontWeight: '600' as const },
+  linkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    marginTop: Spacing.md,
+    ...Shadows.card,
+  },
+  linkIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   linkTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
   linkSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
+  section: {
+    ...Typography.h4,
+    color: Colors.textPrimary,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    marginBottom: Spacing.sm,
+    ...Shadows.card,
+  },
+  cardIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
+  cardSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  tag: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.pill },
+  tagTxt: { ...Typography.caption, fontWeight: '700' as const },
 });

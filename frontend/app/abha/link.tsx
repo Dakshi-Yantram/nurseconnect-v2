@@ -1,17 +1,33 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+/**
+ * Link a health record to a patient.
+ *
+ * Persists through `/abha-records` so the record is actually available to the
+ * nurse during a visit. The previous version pushed an object into local
+ * state and told the user it had been linked — it never left the device.
+ */
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
 import { InputField } from '../../components/InputField';
 import { GradientButton } from '../../components/GradientButton';
 import { OfflineBanner } from '../../components/OfflineBanner';
-import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
+import { Colors, Radius, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
-import { ABHACategory } from '../../types';
+import { abhaService } from '../../services/abha.service';
 
-const CATS: { key: ABHACategory; label: string; icon: any; color: string }[] = [
+const TYPES: { key: string; label: string; icon: any; color: string }[] = [
   { key: 'discharge', label: 'Discharge summary', icon: 'file-document-outline', color: Colors.primary },
   { key: 'lab', label: 'Lab report', icon: 'test-tube', color: Colors.success },
   { key: 'prescription', label: 'Prescription', icon: 'pill', color: Colors.warning },
@@ -20,79 +36,160 @@ const CATS: { key: ABHACategory; label: string; icon: any; color: string }[] = [
 
 export default function LinkAbhaRecord() {
   const router = useRouter();
-  const addAbha = useStore((s) => s.addAbhaRecord);
-  const [cat, setCat] = useState<ABHACategory>('lab');
-  const [type, setType] = useState('');
+  const params = useLocalSearchParams<{ patientId?: string }>();
+  const patients = useStore((s) => s.patients);
+  const loadPatients = useStore((s) => s.loadPatients);
+
+  const [patientId, setPatientId] = useState<string | null>(params.patientId || null);
+  const [recordType, setRecordType] = useState('lab');
+  const [title, setTitle] = useState('');
   const [hospital, setHospital] = useState('');
   const [doctor, setDoctor] = useState('');
+  const [issuedDate, setIssuedDate] = useState('');
   const [summary, setSummary] = useState('');
-  const [picked, setPicked] = useState(false);
+  const [documentUrl, setDocumentUrl] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const submit = () => {
-    if (!type.trim() || !hospital.trim() || !doctor.trim()) {
-      Alert.alert('Please fill all required fields');
-      return;
+  useEffect(() => {
+    loadPatients().catch(() => {});
+  }, [loadPatients]);
+
+  useEffect(() => {
+    if (!patientId && patients.length > 0) setPatientId(patients[0].id);
+  }, [patients, patientId]);
+
+  const submit = async () => {
+    if (!patientId) return Alert.alert('Choose a patient', 'Select who this record belongs to.');
+    if (!title.trim()) return Alert.alert('Add a title', 'e.g. “CBC blood panel”.');
+    if (issuedDate && !/^\d{4}-\d{2}-\d{2}$/.test(issuedDate.trim())) {
+      return Alert.alert('Check the date', 'Use the format YYYY-MM-DD.');
     }
-    if (!picked) {
-      Alert.alert('Please attach the document');
-      return;
+
+    setSaving(true);
+    try {
+      await abhaService.create({
+        patient_id: patientId,
+        record_type: recordType,
+        title: title.trim(),
+        hospital_name: hospital.trim() || undefined,
+        doctor_name: doctor.trim() || undefined,
+        issued_date: issuedDate.trim() || undefined,
+        summary: summary.trim() || undefined,
+        document_url: documentUrl.trim() || undefined,
+      });
+      router.back();
+    } catch (e: any) {
+      Alert.alert('Could not link record', e?.message || 'Please try again.');
+    } finally {
+      setSaving(false);
     }
-    addAbha({
-      id: 'a' + Date.now(),
-      hospital,
-      type,
-      category: cat,
-      date: new Date().toISOString(),
-      doctor,
-      summary,
-      fileSize: '0.6 MB',
-    });
-    Alert.alert('Record linked', 'Your record is now visible in ABHA', [
-      { text: 'OK', onPress: () => router.back() },
-    ]);
   };
 
   return (
-    <SafeAreaView style={styles.safe} testID="link-abha-screen" edges={['top']}>
+    <SafeAreaView style={styles.safe} testID="abha-link-screen" edges={['top']}>
       <OfflineBanner />
-      <Header title="Link new record" fallbackHref="/abha" />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40 }}>
-          <Text style={styles.section}>Category</Text>
-          <View style={styles.grid}>
-            {CATS.map((c) => (
-              <TouchableOpacity
-                key={c.key}
-                onPress={() => setCat(c.key)}
-                style={[styles.catCard, cat === c.key && { borderColor: Colors.primary, borderWidth: 2 }]}
-                testID={`cat-${c.key}`}
-              >
-                <View style={[styles.catIcon, { backgroundColor: c.color + '15' }]}>
-                  <MaterialCommunityIcons name={c.icon} size={20} color={c.color} />
-                </View>
-                <Text style={styles.catTxt}>{c.label}</Text>
-              </TouchableOpacity>
-            ))}
+      <Header title="Link a health record" fallbackHref="/abha" />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {patients.length > 1 && (
+            <>
+              <Text style={styles.fieldLabel}>Patient</Text>
+              <View style={styles.chipRow}>
+                {patients.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.chip, patientId === p.id && styles.chipActive]}
+                    onPress={() => setPatientId(p.id)}
+                  >
+                    <Text style={[styles.chipTxt, patientId === p.id && { color: '#fff' }]}>
+                      {p.full_name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+
+          <Text style={styles.fieldLabel}>Record type</Text>
+          <View style={styles.typeGrid}>
+            {TYPES.map((t) => {
+              const on = recordType === t.key;
+              return (
+                <TouchableOpacity
+                  key={t.key}
+                  style={[styles.typeCard, on && { borderColor: t.color, backgroundColor: t.color + '12' }]}
+                  onPress={() => setRecordType(t.key)}
+                  testID={`abha-type-${t.key}`}
+                >
+                  <MaterialCommunityIcons
+                    name={t.icon}
+                    size={22}
+                    color={on ? t.color : Colors.textTertiary}
+                  />
+                  <Text style={[styles.typeTxt, on && { color: t.color, fontWeight: '700' }]}>
+                    {t.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
-          <InputField label="Record name" placeholder="e.g. Lipid profile" value={type} onChangeText={setType} testID="record-type" />
-          <InputField label="Hospital / clinic" placeholder="e.g. Apollo Hospitals" value={hospital} onChangeText={setHospital} testID="record-hospital" />
-          <InputField label="Doctor" placeholder="e.g. Dr. R. Mehra" value={doctor} onChangeText={setDoctor} testID="record-doctor" />
-          <InputField label="Notes (optional)" placeholder="Any short summary" value={summary} onChangeText={setSummary} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} testID="record-summary" />
+          <InputField
+            label="Title"
+            placeholder="e.g. CBC blood panel"
+            value={title}
+            onChangeText={setTitle}
+            testID="abha-title"
+          />
+          <InputField
+            label="Hospital / lab (optional)"
+            placeholder="Apollo Hospitals"
+            value={hospital}
+            onChangeText={setHospital}
+          />
+          <InputField
+            label="Doctor (optional)"
+            placeholder="Dr. Meera Rao"
+            value={doctor}
+            onChangeText={setDoctor}
+          />
+          <InputField
+            label="Issued date (optional)"
+            placeholder="YYYY-MM-DD"
+            value={issuedDate}
+            onChangeText={setIssuedDate}
+          />
+          <InputField
+            label="Document link (optional)"
+            placeholder="https://…"
+            autoCapitalize="none"
+            keyboardType="url"
+            value={documentUrl}
+            onChangeText={setDocumentUrl}
+          />
+          <InputField
+            label="Summary (optional)"
+            placeholder="Key findings your nurse should know"
+            value={summary}
+            onChangeText={setSummary}
+            multiline
+            numberOfLines={4}
+            style={{ minHeight: 100, textAlignVertical: 'top' }}
+          />
 
-          <Text style={styles.section}>Attachment</Text>
-          <TouchableOpacity
-            style={[styles.attach, picked && styles.attachActive]}
-            onPress={() => setPicked(!picked)}
-            testID="record-attach"
-          >
-            <Ionicons name={picked ? 'checkmark-circle' : 'cloud-upload-outline'} size={28} color={picked ? Colors.success : Colors.primary} />
-            <Text style={styles.attachTxt}>
-              {picked ? 'scan_report.pdf · 0.6 MB' : 'Tap to attach a PDF or image'}
-            </Text>
-          </TouchableOpacity>
-
-          <GradientButton title="Link record" onPress={submit} testID="link-submit" style={{ marginTop: 16 }} />
+          <GradientButton
+            title="Link record"
+            onPress={submit}
+            loading={saving}
+            style={{ marginTop: Spacing.sm }}
+            testID="abha-save"
+          />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -101,12 +198,34 @@ export default function LinkAbhaRecord() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  section: { ...Typography.h4, color: Colors.textPrimary, marginTop: 12, marginBottom: 12 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  catCard: { flex: 1, minWidth: '47%', backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, ...Shadows.card, borderWidth: 1, borderColor: 'transparent' },
-  catIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  catTxt: { ...Typography.bodyBold, color: Colors.textPrimary },
-  attach: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.surface, padding: 16, borderRadius: Radius.lg, borderWidth: 1.5, borderColor: Colors.border, borderStyle: 'dashed' },
-  attachActive: { borderColor: Colors.success, backgroundColor: Colors.successBg },
-  attachTxt: { ...Typography.body, color: Colors.textSecondary, flex: 1 },
+  fieldLabel: {
+    ...Typography.small,
+    color: Colors.textSecondary,
+    fontWeight: '600' as const,
+    marginBottom: 8,
+  },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: Spacing.md },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  chipTxt: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const },
+  typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: Spacing.lg },
+  typeCard: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  typeTxt: { ...Typography.small, color: Colors.textSecondary, textAlign: 'center' },
 });
