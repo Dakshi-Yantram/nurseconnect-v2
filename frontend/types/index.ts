@@ -1,4 +1,6 @@
-export type Role = 'family' | 'nurse';
+import type { AppRole } from '../lib/roles';
+
+export type Role = AppRole;
 
 export interface User {
   id: string;
@@ -6,6 +8,8 @@ export interface User {
   phone: string;
   email?: string;
   role: Role;
+  /** Backend account state: active | onboarding | pending_verification | ... */
+  status?: string;
   abhaId?: string;
   avatar?: string;
 }
@@ -55,12 +59,41 @@ export interface CareType {
   baseRate: number;
 }
 
+/** Coarse UI status used for badges and colours. */
 export type VisitStatus =
   | 'scheduled'
   | 'enroute'
   | 'active'
   | 'completed'
   | 'cancelled';
+
+/**
+ * The backend's `BookingStatus` enum, verbatim. Bucketing and gating must key
+ * off this rather than the coarse `VisitStatus` above — collapsing statuses
+ * loses `rematch_pending` (re-offered after a nurse cancelled) and `disputed`,
+ * both of which previously fell through every filter and vanished from the UI.
+ */
+export type BookingStatus =
+  | 'draft'
+  | 'pending_payment'
+  | 'confirmed'
+  | 'assigned'
+  | 'worker_en_route'
+  | 'worker_arrived'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'missed'
+  | 'rematch_pending'
+  | 'disputed';
+
+export type PaymentStatus =
+  | 'pending'
+  | 'initiated'
+  | 'captured'
+  | 'failed'
+  | 'refunded'
+  | 'partially_refunded';
 
 export interface Booking {
   id: string;
@@ -69,8 +102,8 @@ export interface Booking {
   nurseAvatar: string;
   careTypeId: string;
   careTitle: string;
-  date: string; // ISO date
-  slot: string; // e.g. "09:00 AM"
+  date: string; // YYYY-MM-DD
+  slot: string; // "HH:MM"
   duration: number; // hours
   address: string;
   notes?: string;
@@ -78,14 +111,23 @@ export interface Booking {
   subsidy: number;
   netCost: number;
   status: VisitStatus;
+  /** Untouched backend status — always prefer this for logic. */
+  rawStatus: BookingStatus;
+  paymentStatus: PaymentStatus;
   paid: boolean;
   paymentMethod?: string;
   createdAt: string;
-  // Optional fields surfaced by backend mapper (used for booking-confirmed UI & tracking gate)
+  /** Scheduled start as a real instant, for the 6-hour cancellation window. */
+  scheduledStartISO?: string;
+  isUrgent?: boolean;
   patientId?: string;
   patientName?: string;
   bookingRef?: string;
-  // Patch 3 — proximity dispatch + Google Maps deep link.
+  serviceId?: string | null;
+  packageId?: string | null;
+  cancellationReason?: string | null;
+  acceptedAt?: string | null;
+  // Proximity dispatch + Google Maps deep link.
   distanceKm?: number;
   latitude?: number;
   longitude?: number;

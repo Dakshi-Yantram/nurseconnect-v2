@@ -51,7 +51,6 @@ export default function PaymentSuccess() {
       clearAutoRedirect();
       try {
         // dismissAll is available in expo-router 6+
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const r = router as any;
         if (typeof r.dismissAll === 'function') r.dismissAll();
       } catch {

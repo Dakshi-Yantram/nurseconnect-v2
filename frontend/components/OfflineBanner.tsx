@@ -6,7 +6,7 @@ import { Colors, Spacing, Typography } from '../constants/theme';
 
 export const OfflineBanner: React.FC = () => {
   const isOffline = useStore((s) => s.isOffline);
-  const pendingSync = useStore((s) => s.pendingSync);
+  const pendingSync = useStore((s) => s.pendingSyncCount);
   if (!isOffline && pendingSync === 0) return null;
 
   return (

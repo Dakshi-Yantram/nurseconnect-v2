@@ -1,6 +1,7 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { EmptyState } from '../components/EmptyState';
@@ -12,7 +13,17 @@ export default function NotificationsScreen() {
   const notifications = useStore((s) => s.notifications);
   const markRead = useStore((s) => s.markNotificationRead);
   const markAllRead = useStore((s) => s.markAllRead);
+  const refreshNotifications = useStore((s) => s.refreshNotifications);
   const unread = notifications.filter((n) => !n.read).length;
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Pull fresh on focus — a dispatch or payment event may have landed while
+  // the user was on another screen.
+  useFocusEffect(
+    useCallback(() => {
+      refreshNotifications().catch(() => {});
+    }, [refreshNotifications]),
+  );
 
   const grouped = notifications.reduce<Record<string, typeof notifications>>((acc, n) => {
     if (!acc[n.group]) acc[n.group] = [];
@@ -44,6 +55,16 @@ export default function NotificationsScreen() {
           data={data}
           keyExtractor={(i: any) => i.id}
           contentContainerStyle={{ padding: Spacing.lg }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await refreshNotifications().catch(() => {});
+                setRefreshing(false);
+              }}
+            />
+          }
           renderItem={({ item }: any) => {
             if (item.header) {
               return <Text style={styles.group}>{item.header}</Text>;

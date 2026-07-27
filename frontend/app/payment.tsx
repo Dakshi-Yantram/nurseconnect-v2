@@ -1,222 +1,305 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+/**
+ * Payment for a booking.
+ *
+ * Payment is what makes a booking real: the backend only sets
+ * `dispatch_started_at` — and therefore only starts offering the visit to
+ * nurses — once a payment is captured. So this screen must talk to the real
+ * gateway rather than fabricating a result.
+ *
+ * Two paths, matching the web client:
+ *   - real credentials  -> Razorpay Checkout in a WebView, whose signed
+ *                          response is verified server-side
+ *   - mock mode         -> the backend already returned a mock order, so the
+ *                          checkout would 401; go straight to /verify, which
+ *                          accepts mock signatures only while in mock mode
+ */
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-// SafeAreaView reused for sticky bar bottom inset
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { GradientButton } from '../components/GradientButton';
 import { OfflineBanner } from '../components/OfflineBanner';
+import {
+  RazorpayCheckout,
+  type RazorpaySuccess,
+} from '../components/RazorpayCheckout';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
-import { Booking } from '../types';
-
-const METHODS = [
-  { id: 'upi', label: 'UPI', sub: 'Google Pay, PhonePe, Paytm', icon: 'phone-portrait-outline' },
-  { id: 'card', label: 'Credit / Debit Card', sub: 'HDFC, ICICI, SBI…', icon: 'card-outline' },
-  { id: 'netbanking', label: 'Net Banking', sub: '50+ banks supported', icon: 'business-outline' },
-] as const;
+import { bookingsService } from '../services/bookings.service';
+import {
+  isMockOrder,
+  type BackendPaymentOrder,
+} from '../services/payments.service';
+import { mapBooking } from '../services/mappers';
+import { formatDay, formatTime, inr } from '../lib/format';
+import type { Booking } from '../types';
 
 export default function Payment() {
   const router = useRouter();
-  const draft = useStore((s) => s.draftBooking);
-  const bookings = useStore((s) => s.bookings);
-  const addBooking = useStore((s) => s.addBooking);
+  const { bookingId } = useLocalSearchParams<{ bookingId?: string }>();
+
+  const user = useStore((s) => s.user);
+  const packages = useStore((s) => s.packages);
+  const services = useStore((s) => s.services);
   const initiatePayment = useStore((s) => s.initiatePaymentAPI);
   const verifyPayment = useStore((s) => s.verifyPaymentAPI);
-  const [method, setMethod] = useState<string>('upi');
+
+  const [booking, setBooking] = useState<Booking | null>(null);
+  const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  // Synchronous re-entry guard: prevents duplicate booking creation when
-  //  - user taps Pay multiple times before React state updates
-  //  - Razorpay success callback fires twice
-  //  - useEffect mounts trigger duplicate calls
-  // setProcessing alone is not enough because React state updates are async.
+  const [order, setOrder] = useState<BackendPaymentOrder | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  // Synchronous re-entry guard. `processing` alone is not enough: React state
+  // updates are async, so rapid taps (or a duplicate gateway callback) could
+  // otherwise create two orders for one booking.
   const payInFlight = useRef(false);
 
-  // Phase 4: real backend payment when a backend UUID is present.
-  const isBackendBookingId = (id?: string) =>
-    !!id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  const resolveTitle = useCallback(
+    (serviceId: string | null, packageId: string | null) =>
+      packages.find((p) => p.id === packageId)?.name ??
+      services.find((s) => s.id === serviceId)?.name ??
+      'Home nursing visit',
+    [packages, services],
+  );
 
-  // Guard: if user re-enters this screen for a booking that is already paid/confirmed,
-  // never restart payment. Redirect to Booking Details with the spec's exact message.
   useEffect(() => {
-    const existing = draft?.id ? bookings.find((b) => b.id === draft.id) : null;
-    const alreadyPaid =
-      !!draft?.paid ||
-      !!existing?.paid ||
-      ['scheduled', 'enroute', 'active', 'completed'].includes(String(existing?.status));
-    if (alreadyPaid) {
-      Alert.alert(
-        'Already confirmed',
-        'This booking is already confirmed. Payment has been completed.',
-        [
-          {
-            text: 'View Booking',
-            onPress: () =>
-              router.replace({
-                pathname: '/visit/[id]',
-                params: { id: (existing?.id || draft?.id) as string },
-              }),
-          },
-        ],
-        { cancelable: false },
-      );
-    }
-    // run-once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let cancelled = false;
+    (async () => {
+      if (!bookingId) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const raw = await bookingsService.get(bookingId);
+        if (cancelled) return;
+        const mapped = mapBooking(raw, resolveTitle);
+        setBooking(mapped);
+        // Re-entering an already-paid booking must never restart payment.
+        if (mapped.paid) {
+          Alert.alert('Already paid', 'This booking is confirmed — no further payment is due.', [
+            {
+              text: 'View booking',
+              onPress: () =>
+                router.replace({ pathname: '/visit/[id]', params: { id: mapped.id } }),
+            },
+          ]);
+        }
+      } catch (e: any) {
+        if (!cancelled) Alert.alert('Could not load booking', e?.message || 'Please try again.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId, resolveTitle, router]);
+
+  const finish = useCallback(
+    async (payload: {
+      razorpay_order_id: string;
+      razorpay_payment_id: string;
+      razorpay_signature: string;
+    }) => {
+      if (!booking) return;
+      const res = await verifyPayment({ booking_id: booking.id, ...payload });
+      if (res.verified) {
+        router.replace({ pathname: '/payment-success', params: { id: booking.id } });
+      } else {
+        payInFlight.current = false;
+        Alert.alert(
+          'Payment not confirmed',
+          'We couldn’t confirm your payment. If money was deducted it will be refunded automatically — please contact support.',
+        );
+      }
+    },
+    [booking, verifyPayment, router],
+  );
 
   const pay = async () => {
-    // Hard idempotency guard — synchronous, survives multiple rapid taps and
-    // duplicate success callbacks before React re-renders the disabled button.
-    if (payInFlight.current) return;
+    if (!booking || payInFlight.current) return;
     payInFlight.current = true;
     setProcessing(true);
     try {
-      if (isBackendBookingId(draft?.id)) {
-        // Production payment lifecycle (mocked Razorpay in dev: signature passes).
-        const order = await initiatePayment(draft!.id as string);
-        // razorpay_payment_id acts as the idempotency key on the backend; the
-        // backend rejects duplicate verify calls for the same payment id.
-        const razorpay_payment_id = 'pay_mock_' + draft!.id;
-        await verifyPayment({
-          booking_id: order.booking_id,
-          razorpay_order_id: order.razorpay_order_id,
-          razorpay_payment_id,
-          razorpay_signature: 'mock_signature',
+      const created = await initiatePayment(booking.id);
+      setOrder(created);
+
+      if (isMockOrder(created)) {
+        // Backend has no live Razorpay credentials; it is in mock mode and
+        // will accept a mock signature on /verify.
+        await finish({
+          razorpay_order_id: created.razorpay_order_id,
+          razorpay_payment_id: `pay_mock_${Math.random().toString(36).slice(2, 16)}`,
+          razorpay_signature: `mock_${Math.random().toString(36).slice(2, 34)}`,
         });
-        router.replace({ pathname: '/payment-success', params: { id: draft!.id as string } });
         return;
       }
-      // Local-only demo fallback (preserves existing flow when there's no backend booking yet).
-      const newBooking: Booking = {
-        id: 'b' + Date.now(),
-        nurseId: draft?.nurseId || '',
-        nurseName: draft?.nurseName || '',
-        nurseAvatar: draft?.nurseAvatar || '',
-        careTypeId: draft?.careTypeId || '',
-        careTitle: draft?.careTitle || '',
-        date: draft?.date || new Date().toISOString(),
-        slot: draft?.slot || '10:00 AM',
-        duration: draft?.duration || 1,
-        address: draft?.address || '',
-        notes: draft?.notes,
-        cost: draft?.cost || 0,
-        subsidy: draft?.subsidy || 0,
-        netCost: draft?.netCost || 0,
-        status: 'scheduled',
-        paid: true,
-        paymentMethod: METHODS.find((m) => m.id === method)?.label,
-        createdAt: new Date().toISOString(),
-      };
-      addBooking(newBooking);
-      router.replace({ pathname: '/payment-success', params: { id: newBooking.id } });
+
+      setCheckoutOpen(true);
     } catch (e: any) {
-      // Reset guard on failure so user can retry.
       payInFlight.current = false;
-      Alert.alert('Payment failed', e?.message || 'Please try again');
+      const detail = e?.detail?.detail ?? e?.detail;
+      Alert.alert(
+        'Payment failed',
+        (typeof detail === 'string' ? detail : detail?.message) || e?.message || 'Please try again.',
+      );
     } finally {
       setProcessing(false);
-      // Note: we intentionally do NOT reset payInFlight on success — the screen is
-      // replaced and unmounted, so the guard prevents any late callback from firing
-      // a duplicate booking creation.
     }
   };
+
+  const onCheckoutSuccess = async (result: RazorpaySuccess) => {
+    setCheckoutOpen(false);
+    setProcessing(true);
+    try {
+      await finish(result);
+    } catch (e: any) {
+      payInFlight.current = false;
+      Alert.alert('Verification failed', e?.message || 'Please contact support.');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <Header title="Payment" fallbackHref="/(family)/visits" />
+        <View style={styles.centered}>
+          <ActivityIndicator color={Colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!booking) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <Header title="Payment" fallbackHref="/(family)/visits" />
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle-outline" size={40} color={Colors.textTertiary} />
+          <Text style={styles.emptyTxt}>We couldn’t find that booking.</Text>
+          <GradientButton
+            title="Back to visits"
+            fullWidth={false}
+            onPress={() => router.replace('/(family)/visits')}
+            style={{ marginTop: Spacing.md }}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} testID="payment-screen" edges={['top']}>
       <OfflineBanner />
-      <Header title="Payment" />
+      <Header title="Payment" fallbackHref="/(family)/visits" />
+
       <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 120 }}>
-        {/* Order summary */}
         <View style={styles.summaryCard}>
           <Text style={styles.sumTitle}>Booking summary</Text>
-          <View style={styles.sumRow}>
-            <Text style={styles.sumL}>Service</Text>
-            <Text style={styles.sumR}>{draft?.careTitle}</Text>
-          </View>
-          <View style={styles.sumRow}>
-            <Text style={styles.sumL}>Nurse</Text>
-            <Text style={styles.sumR}>{draft?.nurseName}</Text>
-          </View>
-          <View style={styles.sumRow}>
-            <Text style={styles.sumL}>Date · Time</Text>
-            <Text style={styles.sumR}>
-              {new Date(draft?.date || Date.now()).toLocaleDateString('en-IN', {
-                day: '2-digit',
-                month: 'short',
-              })}{' '}
-              · {draft?.slot}
-            </Text>
-          </View>
-          <View style={styles.sumRow}>
-            <Text style={styles.sumL}>Duration</Text>
-            <Text style={styles.sumR}>{draft?.duration}h</Text>
-          </View>
+          <Row label="Care package" value={booking.careTitle} />
+          <Row label="Reference" value={booking.bookingRef || '—'} />
+          <Row
+            label="Date & time"
+            value={`${formatDay(booking.date, { day: '2-digit', month: 'short' })} · ${formatTime(
+              booking.slot,
+            )}`}
+          />
+          <Row label="Address" value={booking.address} />
           <View style={styles.totalRow}>
             <Text style={styles.totalL}>Amount payable</Text>
-            <Text style={styles.totalR}>₹{draft?.netCost}</Text>
+            <Text style={styles.totalR}>{inr(booking.netCost)}</Text>
           </View>
         </View>
 
-        {/* Methods */}
-        <Text style={styles.sectionTitle}>Choose payment method</Text>
-        {METHODS.map((m) => (
-          <TouchableOpacity
-            key={m.id}
-            style={[styles.methodRow, method === m.id && styles.methodActive]}
-            onPress={() => setMethod(m.id)}
-            testID={`method-${m.id}`}
-          >
-            <View
-              style={[
-                styles.methodIcon,
-                { backgroundColor: method === m.id ? Colors.primary : Colors.infoBg },
-              ]}
-            >
-              <Ionicons
-                name={m.icon as any}
-                size={20}
-                color={method === m.id ? '#fff' : Colors.primary}
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.methodLabel}>{m.label}</Text>
-              <Text style={styles.methodSub}>{m.sub}</Text>
-            </View>
-            <View style={[styles.radio, method === m.id && styles.radioActive]}>
-              {method === m.id && <View style={styles.radioInner} />}
-            </View>
-          </TouchableOpacity>
-        ))}
+        <View style={styles.noticeCard}>
+          <Ionicons name="information-circle" size={18} color={Colors.primary} />
+          <Text style={styles.noticeTxt}>
+            You’ll choose how to pay — UPI, card, net banking or wallet — on the secure Razorpay
+            screen. We never see or store your payment details.
+          </Text>
+        </View>
 
         <View style={styles.secureBox}>
           <FontAwesome5 name="lock" size={12} color={Colors.success} />
           <Text style={styles.secureTxt}>
-            Payments are secured with 256-bit encryption · 100% refund on cancellation
+            Secured by Razorpay · Full refund if you cancel more than 6 hours before the visit
           </Text>
         </View>
       </ScrollView>
 
       <SafeAreaView style={styles.stickyBar} edges={['bottom']}>
         <GradientButton
-          title={`Pay ₹${draft?.netCost || 0}`}
+          title={`Pay ${inr(booking.netCost)}`}
           loading={processing}
           onPress={pay}
           testID="pay-btn"
         />
       </SafeAreaView>
+
+      <RazorpayCheckout
+        visible={checkoutOpen}
+        order={order}
+        description={`${booking.careTitle} · ${booking.bookingRef ?? ''}`.trim()}
+        prefill={{
+          name: user?.name || undefined,
+          email: user?.email || undefined,
+          contact: user?.phone || undefined,
+        }}
+        onSuccess={onCheckoutSuccess}
+        onCancel={() => {
+          setCheckoutOpen(false);
+          payInFlight.current = false;
+        }}
+        onError={(message) => {
+          setCheckoutOpen(false);
+          payInFlight.current = false;
+          Alert.alert('Payment failed', message);
+        }}
+      />
     </SafeAreaView>
   );
 }
 
+const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <View style={styles.sumRow}>
+    <Text style={styles.sumL}>{label}</Text>
+    <Text style={styles.sumR} numberOfLines={2}>
+      {value}
+    </Text>
+  </View>
+);
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  summaryCard: { backgroundColor: Colors.surface, borderRadius: Radius.xl, padding: 16, ...Shadows.card },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
+  emptyTxt: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: Spacing.md,
+  },
+  summaryCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.card,
+    ...Shadows.card,
+  },
   sumTitle: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 12 },
-  sumRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+  sumRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, paddingVertical: 6 },
   sumL: { ...Typography.body, color: Colors.textSecondary },
-  sumR: { ...Typography.bodyBold, color: Colors.textPrimary },
+  sumR: { ...Typography.bodyBold, color: Colors.textPrimary, flex: 1, textAlign: 'right' },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -227,24 +310,16 @@ const styles = StyleSheet.create({
   },
   totalL: { ...Typography.h4, color: Colors.textPrimary },
   totalR: { ...Typography.h2, color: Colors.primary, fontWeight: '800' as const },
-  sectionTitle: { ...Typography.h3, color: Colors.textPrimary, marginTop: 24, marginBottom: 12 },
-  methodRow: {
+  noticeCard: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
+    gap: 10,
+    alignItems: 'flex-start',
+    backgroundColor: Colors.infoBg,
+    borderRadius: Radius.md,
     padding: 14,
-    marginBottom: 8,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
+    marginTop: Spacing.md,
   },
-  methodActive: { borderColor: Colors.primary, backgroundColor: '#EFF6FF' },
-  methodIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  methodLabel: { ...Typography.bodyBold, color: Colors.textPrimary },
-  methodSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
-  radioActive: { borderColor: Colors.primary },
-  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primary },
+  noticeTxt: { ...Typography.small, color: Colors.primary, flex: 1, lineHeight: 18 },
   secureBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -252,9 +327,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.successBg,
     padding: 12,
     borderRadius: Radius.md,
-    marginTop: 16,
+    marginTop: Spacing.md,
   },
-  secureTxt: { ...Typography.small, color: Colors.success, flex: 1 },
+  secureTxt: { ...Typography.small, color: Colors.success, flex: 1, lineHeight: 17 },
   stickyBar: {
     position: 'absolute',
     bottom: 0,

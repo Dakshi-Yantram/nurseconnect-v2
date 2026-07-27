@@ -105,10 +105,42 @@ export interface RatingPayload {
   comment?: string;
 }
 
+/**
+ * Consumer-side response when generating the visit-start code. The code is
+ * always returned in `otp` — SMS delivery is a convenience, not the source of
+ * truth, so the consumer can read it off their screen for the nurse.
+ */
+export interface VisitStartOtp {
+  sent: boolean;
+  sms_sent: boolean | null;
+  message: string;
+  expires_in_seconds: number;
+  otp: string;
+}
+
 export const visitsService = {
   get: (bookingId: string) => api.get<VisitRecordOut>(`/visits/${bookingId}`),
   checkin: (bookingId: string, lat: number, lng: number) =>
     api.post<VisitRecordOut>(`/visits/${bookingId}/checkin`, { latitude: lat, longitude: lng }),
+
+  /**
+   * Consumer: ensure a visit-start code exists. Idempotent — returns the live
+   * code (with its remaining TTL) if one is already active.
+   */
+  generateStartOtp: (bookingId: string) =>
+    api.post<VisitStartOtp>(`/visits/${bookingId}/generate-start-otp`),
+
+  /**
+   * Nurse: enter the code the consumer read out to start the visit. Only the
+   * worker assigned to this booking can verify, so the bare 4-digit code is
+   * useless to anyone else. Capped at 5 attempts server-side.
+   */
+  verifyStartOtp: (bookingId: string, otp: string, lat: number, lng: number) =>
+    api.post<VisitRecordOut>(`/visits/${bookingId}/verify-start-otp`, {
+      otp,
+      latitude: lat,
+      longitude: lng,
+    }),
   checkout: (
     bookingId: string,
     payload: { latitude?: number; longitude?: number; family_summary?: string; care_notes?: string }

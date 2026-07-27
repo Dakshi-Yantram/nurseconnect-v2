@@ -1,12 +1,40 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity } from 'react-native';
+/**
+ * Care professional home.
+ *
+ * Two things gate whether a nurse ever sees work, so both are surfaced here
+ * rather than buried: onboarding approval, and being opted in to at least one
+ * care package. A nurse with neither sees an empty "new requests" list and no
+ * explanation, which is indistinguishable from there being no work.
+ */
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
+import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { OfflineBanner } from '../../components/OfflineBanner';
+import { BookingCard } from '../../components/BookingCard';
+import { AsyncBoundary } from '../../components/AsyncBoundary';
 import { useStore } from '../../store';
+import { inr } from '../../lib/format';
+
+const AVAILABILITY: {
+  id: 'online' | 'offline' | 'busy' | 'on_leave';
+  label: string;
+  color: string;
+}[] = [
+  { id: 'online', label: 'Available', color: Colors.success },
+  { id: 'busy', label: 'Busy', color: Colors.warning },
+  { id: 'offline', label: 'Offline', color: Colors.textSecondary },
+  { id: 'on_leave', label: 'On leave', color: Colors.accent },
+];
 
 export default function NurseDashboard() {
   const router = useRouter();
@@ -15,288 +43,472 @@ export default function NurseDashboard() {
   const newRequests = useStore((s) => s.newRequests);
   const kit = useStore((s) => s.kit);
   const earnings = useStore((s) => s.earnings);
+  const eligibility = useStore((s) => s.eligibility);
+  const workerProfile = useStore((s) => s.workerProfile);
+  const onboarding = useStore((s) => s.onboarding);
+  const notifications = useStore((s) => s.notifications);
+  const state = useStore((s) => s.loadState.assignments);
   const bootstrapNurse = useStore((s) => s.bootstrapNurse);
+  const loadEligibilityAPI = useStore((s) => s.loadEligibilityAPI);
+  const updateAvailabilityAPI = useStore((s) => s.updateAvailabilityAPI);
 
-  // Bootstrap nurse data on every focus (lightweight: parallel allSettled)
+  const [refreshing, setRefreshing] = useState(false);
+  const [savingAvailability, setSavingAvailability] = useState(false);
+
   useFocusEffect(
-    React.useCallback(() => {
+    useCallback(() => {
       bootstrapNurse().catch(() => {});
-    }, [bootstrapNurse])
+      loadEligibilityAPI().catch(() => {});
+    }, [bootstrapNurse, loadEligibilityAPI]),
   );
 
-  const today = assignments.filter((a) => {
-    const d = new Date(a.date);
-    const t = new Date();
-    return d.toDateString() === t.toDateString();
-  });
-  const completedThisMonth = assignments.filter((a) => a.status === 'completed').length;
-  const earningsMonth = earnings
-    ? Math.round(Number(earnings.total_paid || 0) + Number(earnings.total_pending || 0))
-    : assignments.reduce((s, a) => s + a.netCost, 0);
+  const unread = notifications.filter((n) => !n.read).length;
+
+  const todayYmd = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`;
+  }, []);
+
+  const todaysVisits = assignments.filter(
+    (a) => a.date === todayYmd && !['completed', 'cancelled', 'missed'].includes(a.rawStatus),
+  );
+  const activeVisit = assignments.find((a) => a.rawStatus === 'in_progress') ?? null;
+  const completedCount = assignments.filter((a) => a.rawStatus === 'completed').length;
+
   const kitDone = kit.filter((k) => k.checked).length;
-  const kitTotal = Math.max(kit.length, 1);
-  const kitPct = Math.round((kitDone / kitTotal) * 100);
+  const kitPct = kit.length ? Math.round((kitDone / kit.length) * 100) : 0;
+
+  // "Eligible" is what actually decides whether work reaches this nurse:
+  // qualified for the offering AND not explicitly opted out of it.
+  const eligibleCount = eligibility.filter(
+    (e) => e.can_opt_in && e.preference_status === 'OPTED_IN',
+  ).length;
+  const approved = onboarding ? onboarding.onboarding_status === 'approved' : true;
+  const availability = workerProfile?.availability ?? 'offline';
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await bootstrapNurse().catch(() => {});
+    setRefreshing(false);
+  };
+
+  const setAvailability = async (next: 'online' | 'offline' | 'busy' | 'on_leave') => {
+    setSavingAvailability(true);
+    try {
+      await updateAvailabilityAPI(next);
+    } finally {
+      setSavingAvailability(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe} testID="nurse-dashboard" edges={['top']}>
       <OfflineBanner />
-      <ScrollView contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-        {/* Greeting */}
-        <View style={styles.greetRow}>
-          <Image
-            source={{
-              uri:
-                user?.avatar ||
-                'https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&w=200&q=80',
-            }}
-            style={styles.avatar}
-          />
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.hello}>Hi, {user?.name?.split(' ')[0] || 'Nurse'}</Text>
-            <Text style={styles.subHello}>Ready for today’s visits</Text>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* ---------------------------------------------------- header --- */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hello}>Hi, {user?.name?.split(' ')[0] || 'there'}</Text>
+            <Text style={styles.subHello}>
+              {todaysVisits.length > 0
+                ? `${todaysVisits.length} visit${todaysVisits.length === 1 ? '' : 's'} today`
+                : 'No visits scheduled today'}
+            </Text>
           </View>
           <TouchableOpacity
-            style={styles.notifBtn}
+            style={styles.bell}
             onPress={() => router.push('/notifications')}
+            testID="nurse-notifications"
           >
             <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
+            {unread > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeTxt}>{unread > 9 ? '9+' : unread}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
-        {/* Earnings hero */}
-        <LinearGradient
-          colors={Gradients.teal as any}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          <Text style={styles.heroLabel}>This month’s earnings</Text>
-          <Text style={styles.heroValue}>₹{earningsMonth.toLocaleString('en-IN')}</Text>
-          <View style={styles.heroRow}>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroBoxNum}>{today.length}</Text>
-              <Text style={styles.heroBoxLab}>Today</Text>
+        {/* ------------------------------------------ onboarding gate ---- */}
+        {!approved && (
+          <TouchableOpacity
+            style={styles.blockCard}
+            onPress={() => router.push('/onboarding-status')}
+            testID="nurse-onboarding-gate"
+          >
+            <Ionicons name="shield-half" size={20} color={Colors.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.blockTitle}>
+                {onboarding?.onboarding_status === 'pending_review'
+                  ? 'Your profile is under review'
+                  : 'Finish your verification'}
+              </Text>
+              <Text style={styles.blockSub}>
+                {onboarding?.onboarding_status === 'pending_review'
+                  ? 'We’ll let you know as soon as a reviewer approves you. You can’t accept visits until then.'
+                  : 'Upload your documents to start receiving visit requests.'}
+              </Text>
             </View>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroBoxNum}>{completedThisMonth}</Text>
-              <Text style={styles.heroBoxLab}>Completed</Text>
-            </View>
-            <View style={styles.heroBox}>
-              <Text style={styles.heroBoxNum}>4.9</Text>
-              <Text style={styles.heroBoxLab}>Rating ★</Text>
-            </View>
-          </View>
-        </LinearGradient>
+            <Ionicons name="chevron-forward" size={18} color={Colors.warning} />
+          </TouchableOpacity>
+        )}
 
-        {/* New requests */}
-        {newRequests.length > 0 && (
-          <View style={styles.requestCard}>
-            <View style={styles.requestHead}>
-              <View style={[styles.iconBubble, { backgroundColor: Colors.warningBg }]}>
-                <MaterialCommunityIcons name="bell-ring" size={18} color={Colors.warning} />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.requestTitle}>
-                  {newRequests.length} new request{newRequests.length > 1 ? 's' : ''}
-                </Text>
-                <Text style={styles.requestSub}>Tap to review and accept</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.requestBtn}
-                onPress={() => router.push('/(nurse)/assignments')}
-                testID="view-requests-btn"
-              >
-                <Text style={styles.requestBtnTxt}>View</Text>
-              </TouchableOpacity>
+        {/* ------------------------------------------- eligibility gate -- */}
+        {approved && eligibility.length > 0 && eligibleCount === 0 && (
+          <TouchableOpacity
+            style={styles.blockCard}
+            onPress={() => router.push('/service-preferences')}
+            testID="nurse-eligibility-gate"
+          >
+            <Ionicons name="options" size={20} color={Colors.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.blockTitle}>No care packages open to you yet</Text>
+              <Text style={styles.blockSub}>
+                You’re not currently eligible for any package, so no visits can be offered. Check
+                what’s outstanding — usually training or a certificate.
+              </Text>
             </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.warning} />
+          </TouchableOpacity>
+        )}
+
+        {/* ------------------------------------------------ availability -- */}
+        {approved && (
+          <View style={styles.availCard}>
+            <Text style={styles.availLabel}>I’m currently</Text>
+            <View style={styles.availRow}>
+              {AVAILABILITY.map((a) => {
+                const on = availability === a.id;
+                return (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={[styles.availChip, on && { backgroundColor: a.color }]}
+                    disabled={savingAvailability}
+                    onPress={() => setAvailability(a.id)}
+                    testID={`availability-${a.id}`}
+                  >
+                    <Text style={[styles.availTxt, on && { color: '#fff' }]}>{a.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {availability !== 'online' && (
+              <Text style={styles.availHint}>
+                You’ll keep your accepted visits, but new requests only go to nurses marked
+                available.
+              </Text>
+            )}
           </View>
         )}
 
-        {/* Today schedule */}
-        <View style={styles.row}>
-          <Text style={styles.section}>Today’s schedule</Text>
+        {/* --------------------------------------------- active visit ---- */}
+        {!!activeVisit && (
+          <TouchableOpacity
+            style={styles.activeCard}
+            onPress={() =>
+              router.push({ pathname: '/nurse-visit/[id]', params: { id: activeVisit.id } })
+            }
+            testID="nurse-active-visit"
+          >
+            <View style={styles.activeIcon}>
+              <MaterialCommunityIcons name="pulse" size={22} color="#fff" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.activeTitle}>Visit in progress</Text>
+              <Text style={styles.activeSub}>{activeVisit.careTitle}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#fff" />
+          </TouchableOpacity>
+        )}
+
+        {/* ---------------------------------------------------- stats ---- */}
+        <View style={styles.statsRow}>
+          <Stat
+            value={String(newRequests.length)}
+            label="New requests"
+            onPress={() => router.push('/(nurse)/assignments')}
+          />
+          <Stat value={String(completedCount)} label="Completed" />
+          <Stat
+            value={inr(Number(earnings?.total_paid ?? 0))}
+            label="Paid out"
+            onPress={() => router.push('/earnings')}
+          />
+        </View>
+
+        {/* ------------------------------------------------------ kit ---- */}
+        {kit.length > 0 && (
+          <TouchableOpacity
+            style={styles.kitCard}
+            onPress={() => router.push('/(nurse)/kit')}
+            testID="nurse-kit"
+          >
+            <MaterialCommunityIcons
+              name="medical-bag"
+              size={20}
+              color={kitPct === 100 ? Colors.success : Colors.warning}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.kitTitle}>
+                Visit kit {kitDone}/{kit.length}
+              </Text>
+              <View style={styles.kitBar}>
+                <View
+                  style={[
+                    styles.kitFill,
+                    {
+                      width: `${kitPct}%`,
+                      backgroundColor: kitPct === 100 ? Colors.success : Colors.warning,
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
+          </TouchableOpacity>
+        )}
+
+        {/* ------------------------------------------------ today list --- */}
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Today’s visits</Text>
           <TouchableOpacity onPress={() => router.push('/(nurse)/assignments')}>
             <Text style={styles.seeAll}>See all</Text>
           </TouchableOpacity>
         </View>
-        {today.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <MaterialCommunityIcons name="calendar-check" size={32} color={Colors.textTertiary} />
-            <Text style={styles.emptyTxt}>No visits scheduled today</Text>
-          </View>
-        ) : (
-          today.slice(0, 3).map((a) => (
-            <TouchableOpacity
-              key={a.id}
-              style={styles.assignRow}
-              onPress={() =>
-                router.push({ pathname: '/nurse-visit/[id]', params: { id: a.id } })
-              }
-              testID={`assignment-${a.id}`}
-            >
-              <View style={styles.timeChip}>
-                <Text style={styles.timeChipTxt}>{a.slot}</Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.assignTitle} numberOfLines={1}>
-                  {a.careTitle}
-                </Text>
-                <Text style={styles.assignSub} numberOfLines={1}>
-                  {a.address}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
-            </TouchableOpacity>
-          ))
-        )}
 
-        {/* Kit checklist preview */}
-        <Text style={styles.section}>Your kit checklist</Text>
-        <TouchableOpacity
-          style={styles.kitCard}
-          onPress={() => router.push('/(nurse)/kit')}
-          testID="kit-preview"
-        >
-          <View style={styles.kitHead}>
-            <Text style={styles.kitTitle}>Daily preparation</Text>
-            <Text style={[styles.kitPct, { color: kitPct >= 80 ? Colors.success : Colors.warning }]}>
-              {kitPct}%
-            </Text>
-          </View>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${kitPct}%` }]} />
-          </View>
-          <Text style={styles.kitSub}>
-            {kitDone} of {kitTotal} essential items ready
-          </Text>
-        </TouchableOpacity>
+        <View style={{ paddingHorizontal: Spacing.lg }}>
+          <AsyncBoundary
+            state={state}
+            isEmpty={todaysVisits.length === 0}
+            emptyTitle="Nothing scheduled today"
+            emptyDescription={
+              newRequests.length > 0
+                ? `There ${newRequests.length === 1 ? 'is' : 'are'} ${newRequests.length} open request${newRequests.length === 1 ? '' : 's'} you can claim.`
+                : approved
+                  ? 'New requests near you will appear here as they come in.'
+                  : 'Once your profile is approved you’ll start receiving requests.'
+            }
+            emptyIcon="calendar-outline"
+            emptyCtaTitle={newRequests.length > 0 ? 'View requests' : undefined}
+            onEmptyCtaPress={() => router.push('/(nurse)/assignments')}
+            onRetry={() => bootstrapNurse()}
+          >
+            {todaysVisits.map((v) => (
+              <BookingCard
+                key={v.id}
+                booking={v}
+                onPress={() =>
+                  router.push({ pathname: '/nurse-visit/[id]', params: { id: v.id } })
+                }
+              />
+            ))}
+          </AsyncBoundary>
+        </View>
 
-        {/* Quick actions */}
-        <Text style={styles.section}>Quick actions</Text>
-        <View style={styles.qaRow}>
-          <TouchableOpacity
-            style={styles.qaBox}
-            onPress={() => router.push('/earnings')}
-            testID="quick-earnings"
-          >
-            <View style={[styles.qaIcon, { backgroundColor: Colors.successBg }]}>
-              <MaterialCommunityIcons name="cash-multiple" size={20} color={Colors.success} />
-            </View>
-            <Text style={styles.qaLabel}>Earnings</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.qaBox} onPress={() => router.push('/(nurse)/kit')}>
-            <View style={[styles.qaIcon, { backgroundColor: Colors.warningBg }]}>
-              <MaterialCommunityIcons name="medical-bag" size={20} color={Colors.warning} />
-            </View>
-            <Text style={styles.qaLabel}>Kit</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.qaBox} onPress={() => router.push('/training')} testID="quick-training">
-            <View style={[styles.qaIcon, { backgroundColor: Colors.infoBg }]}>
-              <MaterialCommunityIcons name="school" size={20} color={Colors.primary} />
-            </View>
-            <Text style={styles.qaLabel}>Training</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.qaBox}
-            onPress={() => router.push('/certificates')}
-            testID="quick-certificates"
-          >
-            <View style={[styles.qaIcon, { backgroundColor: Colors.errorBg }]}>
-              <Ionicons name="ribbon" size={20} color={Colors.error} />
-            </View>
-            <Text style={styles.qaLabel}>Certificates</Text>
-          </TouchableOpacity>
+        {/* --------------------------------------------------- shortcuts - */}
+        <View style={styles.shortcutRow}>
+          <Shortcut
+            icon="school-outline"
+            label="Training"
+            onPress={() => router.push('/training')}
+          />
+          <Shortcut
+            icon="clipboard-outline"
+            label="Assessments"
+            onPress={() => router.push('/assessments')}
+          />
+          <Shortcut
+            icon="options-outline"
+            label="My services"
+            onPress={() => router.push('/service-preferences')}
+          />
+          <Shortcut
+            icon="help-buoy-outline"
+            label="Help"
+            onPress={() => router.push('/support')}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+const Stat: React.FC<{ value: string; label: string; onPress?: () => void }> = ({
+  value,
+  label,
+  onPress,
+}) => (
+  <TouchableOpacity style={styles.statCard} onPress={onPress} disabled={!onPress}>
+    <Text style={styles.statValue} numberOfLines={1}>
+      {value}
+    </Text>
+    <Text style={styles.statLabel}>{label}</Text>
+  </TouchableOpacity>
+);
+
+const Shortcut: React.FC<{
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}> = ({ icon, label, onPress }) => (
+  <TouchableOpacity style={styles.shortcut} onPress={onPress} testID={`shortcut-${label}`}>
+    <View style={styles.shortcutIcon}>
+      <Ionicons name={icon} size={20} color={Colors.teal} />
+    </View>
+    <Text style={styles.shortcutTxt}>{label}</Text>
+  </TouchableOpacity>
+);
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  greetRow: { flexDirection: 'row', alignItems: 'center', padding: Spacing.lg },
-  avatar: { width: 44, height: 44, borderRadius: 22 },
-  hello: { ...Typography.h3, color: Colors.textPrimary },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
+  },
+  hello: { ...Typography.h2, color: Colors.textPrimary },
   subHello: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  notifBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  bell: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadows.card,
   },
-  hero: { marginHorizontal: Spacing.lg, borderRadius: Radius.xl, padding: 20, ...Shadows.floating },
-  heroLabel: { ...Typography.caption, color: 'rgba(255,255,255,0.85)' },
-  heroValue: { ...Typography.h1, color: '#fff', fontWeight: '800' as const, marginTop: 4 },
-  heroRow: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  heroBox: { flex: 1, backgroundColor: 'rgba(255,255,255,0.18)', padding: 12, borderRadius: Radius.md },
-  heroBoxNum: { ...Typography.h3, color: '#fff', fontWeight: '800' as const },
-  heroBoxLab: { ...Typography.caption, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
-  requestCard: {
-    backgroundColor: Colors.surface,
-    margin: Spacing.lg,
-    marginBottom: 0,
-    padding: 14,
-    borderRadius: Radius.lg,
-    ...Shadows.card,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.warning,
-  },
-  requestHead: { flexDirection: 'row', alignItems: 'center' },
-  iconBubble: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  requestTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
-  requestSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  requestBtn: { backgroundColor: Colors.warning, paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.pill },
-  requestBtnTxt: { ...Typography.small, color: '#fff', fontWeight: '700' as const },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  badge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    borderRadius: 8,
+    backgroundColor: Colors.error,
     alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    marginTop: 24,
+    justifyContent: 'center',
   },
-  section: { ...Typography.h3, color: Colors.textPrimary, marginHorizontal: Spacing.lg, marginTop: 24, marginBottom: 12 },
-  seeAll: { ...Typography.small, color: Colors.teal, fontWeight: '700' as const },
-  emptyCard: {
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    margin: Spacing.lg,
-    padding: 24,
-    borderRadius: Radius.lg,
-    ...Shadows.card,
-  },
-  emptyTxt: { ...Typography.body, color: Colors.textTertiary, marginTop: 8 },
-  assignRow: {
+  badgeTxt: { color: '#fff', fontSize: 9, fontWeight: '800' as const },
+  blockCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
+    gap: 12,
     marginHorizontal: Spacing.lg,
-    marginBottom: 8,
-    padding: 14,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.warningBg,
     borderRadius: Radius.lg,
+    padding: 14,
+  },
+  blockTitle: { ...Typography.bodyBold, color: Colors.warning },
+  blockSub: { ...Typography.small, color: Colors.warning, marginTop: 2, lineHeight: 17 },
+  availCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
     ...Shadows.card,
   },
-  timeChip: { backgroundColor: Colors.infoBg, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.md },
-  timeChipTxt: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
-  assignTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
-  assignSub: { ...Typography.small, color: Colors.textTertiary, marginTop: 2 },
-  kitCard: {
-    backgroundColor: Colors.surface,
+  availLabel: { ...Typography.small, color: Colors.textSecondary, marginBottom: 10 },
+  availRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  availChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  availTxt: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const },
+  availHint: { ...Typography.caption, color: Colors.textTertiary, marginTop: 10, lineHeight: 16 },
+  activeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginHorizontal: Spacing.lg,
-    padding: 16,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.teal,
     borderRadius: Radius.xl,
+    padding: Spacing.card,
+    ...Shadows.floating,
+  },
+  activeIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeTitle: { ...Typography.bodyBold, color: '#fff' },
+  activeSub: { ...Typography.small, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
+  statsRow: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.lg },
+  statCard: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
     ...Shadows.card,
   },
-  kitHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  kitTitle: { ...Typography.bodyBold, color: Colors.textPrimary },
-  kitPct: { ...Typography.h4, fontWeight: '800' as const },
-  progressTrack: { height: 8, backgroundColor: Colors.surfaceAlt, borderRadius: 4 },
-  progressFill: { height: 8, backgroundColor: Colors.success, borderRadius: 4 },
-  kitSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 8 },
-  qaRow: { flexDirection: 'row', paddingHorizontal: Spacing.md },
-  qaBox: { flex: 1, backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: 14, alignItems: 'center', margin: 4, ...Shadows.card },
-  qaIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  qaLabel: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const, marginTop: 8, textAlign: 'center' },
+  statValue: { ...Typography.h4, color: Colors.textPrimary, fontWeight: '800' as const },
+  statLabel: { ...Typography.caption, color: Colors.textSecondary, marginTop: 4 },
+  kitCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    ...Shadows.card,
+  },
+  kitTitle: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const },
+  kitBar: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.surfaceAlt,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  kitFill: { height: 6, borderRadius: 3 },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  sectionTitle: { ...Typography.h4, color: Colors.textPrimary },
+  seeAll: { ...Typography.small, color: Colors.teal, fontWeight: '700' as const },
+  shortcutRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+  },
+  shortcut: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    paddingVertical: 14,
+    alignItems: 'center',
+    gap: 8,
+    ...Shadows.card,
+  },
+  shortcutIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shortcutTxt: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600' as const },
 });

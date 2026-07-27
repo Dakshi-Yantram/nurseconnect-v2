@@ -1,49 +1,94 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, RefreshControl, Linking } from 'react-native';
+/**
+ * Care professional's visits.
+ *
+ * Three views: open requests the nurse may claim, their upcoming/active
+ * visits, and history. Cancelling from here does NOT kill the booking — the
+ * server moves it to `rematch_pending` and re-offers it to other qualified
+ * nurses — so the copy says exactly that.
+ */
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Alert,
+  RefreshControl,
+  Linking,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../components/Header';
 import { OfflineBanner } from '../../components/OfflineBanner';
-import { EmptyState } from '../../components/EmptyState';
+import { AsyncBoundary } from '../../components/AsyncBoundary';
+import { BookingStatusBadge } from '../../components/BookingStatusBadge';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
+import { canNurseCancel, CANCELLATION_CLOSED_MESSAGE } from '../../lib/booking-domain';
+import { formatDay, formatTime, inr } from '../../lib/format';
+import type { Booking } from '../../types';
 
-// Patch 3 — pure deep link to the consumer's Google Maps app. No backend
-// SDK / API key is involved here.
-function openInGoogleMaps(lat?: number, lng?: number, label?: string) {
+type Tab = 'requests' | 'upcoming' | 'past';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'requests', label: 'Requests' },
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'past', label: 'History' },
+];
+
+/** Deep link to the maps app — no SDK or API key involved. */
+function openInMaps(lat?: number, lng?: number) {
   if (lat === undefined || lng === undefined || Number.isNaN(lat) || Number.isNaN(lng)) {
-    Alert.alert('Location unavailable', 'No coordinates on file for this booking.');
+    Alert.alert('Location unavailable', 'No coordinates are on file for this booking.');
     return;
   }
-  const q = `${lat},${lng}`;
-  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}${label ? `&query_place_id=${encodeURIComponent(label)}` : ''}`;
-  Linking.openURL(url).catch(() => Alert.alert('Could not open Google Maps'));
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
+  Linking.openURL(url).catch(() => Alert.alert('Could not open Maps'));
 }
 
 export default function Assignments() {
   const router = useRouter();
   const { tab: tabParam } = useLocalSearchParams<{ tab?: string }>();
-  const [tab, setTab] = useState<'today' | 'requests' | 'past'>(
-    tabParam === 'past' ? 'past' : tabParam === 'requests' ? 'requests' : 'today'
+  const [tab, setTab] = useState<Tab>(
+    tabParam === 'past' ? 'past' : tabParam === 'requests' ? 'requests' : 'upcoming',
   );
   const [refreshing, setRefreshing] = useState(false);
-  const [acceptingIds, setAcceptingIds] = useState<Set<string>>(new Set());
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+
   const assignments = useStore((s) => s.assignments);
   const newRequests = useStore((s) => s.newRequests);
+  const assignmentsState = useStore((s) => s.loadState.assignments);
+  const requestsState = useStore((s) => s.loadState.newRequests);
+  const eligibility = useStore((s) => s.eligibility);
   const refreshAssignmentsAPI = useStore((s) => s.refreshAssignmentsAPI);
   const refreshNewRequestsAPI = useStore((s) => s.refreshNewRequestsAPI);
   const acceptAPI = useStore((s) => s.acceptAssignmentAPI);
   const cancelAPI = useStore((s) => s.cancelAssignmentAPI);
-  const declineLocal = useStore((s) => s.declineRequest);
 
-  // Refresh on focus + when switching tabs
   useFocusEffect(
-    React.useCallback(() => {
+    useCallback(() => {
       refreshAssignmentsAPI().catch(() => {});
       refreshNewRequestsAPI().catch(() => {});
-    }, [refreshAssignmentsAPI, refreshNewRequestsAPI])
+    }, [refreshAssignmentsAPI, refreshNewRequestsAPI]),
   );
+
+  const { upcoming, past } = useMemo(() => {
+    const done = ['completed', 'cancelled', 'missed'];
+    return {
+      upcoming: assignments.filter((a) => !done.includes(a.rawStatus)),
+      past: assignments.filter((a) => done.includes(a.rawStatus)),
+    };
+  }, [assignments]);
+
+  const rows = tab === 'requests' ? newRequests : tab === 'upcoming' ? upcoming : past;
+  const state = tab === 'requests' ? requestsState : assignmentsState;
+  // What actually decides whether requests reach this nurse: qualified for
+  // the offering AND not explicitly opted out of it.
+  const eligibleCount = eligibility.filter(
+    (e) => e.can_opt_in && e.preference_status === 'OPTED_IN',
+  ).length;
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -51,43 +96,13 @@ export default function Assignments() {
     setRefreshing(false);
   };
 
-  const handleAccept = async (id: string) => {
-    if (acceptingIds.has(id)) return; // prevent double-tap
-    setAcceptingIds((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
+  const withBusy = async (id: string, fn: () => Promise<void>) => {
+    if (busyIds.has(id)) return;
+    setBusyIds((prev) => new Set(prev).add(id));
     try {
-      await acceptAPI(id);
-      // Only after backend confirms success.
-      Alert.alert('Accepted', 'Assignment moved to today’s schedule');
-    } catch (e: any) {
-      const code = e?.detail?.code;
-      if (code === 'BOOKING_ALREADY_CLAIMED') {
-        Alert.alert(
-          'Already claimed',
-          'This booking has already been claimed by another care professional.'
-        );
-      } else if (code === 'WORKER_TIME_CONFLICT') {
-        Alert.alert('Time conflict', 'You already have another booking during this time.');
-      } else if (code === 'BOOKING_NOT_AVAILABLE') {
-        Alert.alert('Unavailable', 'This request is no longer available.');
-      } else if (code === 'WORKER_NOT_QUALIFIED_FOR_SERVICE') {
-        Alert.alert(
-          'Not qualified',
-          'You are not yet qualified for this service. Please complete the required training or wait for admin approval.'
-        );
-      } else if (code === 'WORKER_NOT_OPTED_IN_FOR_SERVICE') {
-        Alert.alert(
-          'Not opted in',
-          'You have not opted in to receive this service. Update your service preferences first.'
-        );
-      } else {
-        Alert.alert('Could not accept', e?.message || 'Please try again.');
-      }
+      await fn();
     } finally {
-      setAcceptingIds((prev) => {
+      setBusyIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
@@ -95,280 +110,346 @@ export default function Assignments() {
     }
   };
 
-  // Sync tab if param changes (e.g., when redirected from visit-success)
-  useEffect(() => {
-    if (tabParam === 'past' && tab !== 'past') setTab('past');
-  }, [tabParam]);
+  const accept = (b: Booking) =>
+    withBusy(b.id, async () => {
+      try {
+        await acceptAPI(b.id);
+        setTab('upcoming');
+      } catch (e: any) {
+        const code = e?.detail?.code;
+        if (code === 'BOOKING_ALREADY_CLAIMED') {
+          Alert.alert(
+            'Already claimed',
+            'Another care professional accepted this first. It has been removed from your list.',
+          );
+        } else if (code === 'WORKER_TIME_CONFLICT') {
+          Alert.alert(
+            'Schedule clash',
+            'You already have another visit booked during this time slot.',
+          );
+        } else if (code === 'BOOKING_NOT_AVAILABLE') {
+          Alert.alert('No longer available', 'This request has been withdrawn.');
+        } else {
+          Alert.alert('Could not accept', e?.message || 'Please try again.');
+        }
+      }
+    });
 
-  const todayList = assignments.filter((a) => a.status !== 'completed' && a.status !== 'cancelled');
-  const pastList = assignments
-    .filter((a) => a.status === 'completed' || a.status === 'cancelled')
-    .slice()
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const cancel = (b: Booking) => {
+    if (!canNurseCancel(b)) {
+      Alert.alert('Cancellation closed', CANCELLATION_CLOSED_MESSAGE);
+      return;
+    }
+    Alert.alert(
+      'Cancel this visit?',
+      'The visit will be offered to other qualified nurses straight away, and the family will be told we’re finding a replacement. Repeated cancellations affect your rating.',
+      [
+        { text: 'Keep visit', style: 'cancel' },
+        {
+          text: 'Cancel visit',
+          style: 'destructive',
+          onPress: () =>
+            withBusy(b.id, async () => {
+              try {
+                await cancelAPI(b.id, 'Cancelled by care professional');
+              } catch (e: any) {
+                const detail = e?.detail?.detail ?? e?.detail;
+                Alert.alert(
+                  'Could not cancel',
+                  detail?.code === 'CANCELLATION_WINDOW_CLOSED'
+                    ? CANCELLATION_CLOSED_MESSAGE
+                    : e?.message || 'Please try again.',
+                );
+              }
+            }),
+        },
+      ],
+    );
+  };
 
-  const data = tab === 'today' ? todayList : tab === 'past' ? pastList : newRequests;
+  const emptyCopy: Record<Tab, { title: string; description: string }> = {
+    requests: {
+      title: 'No open requests',
+      description:
+        eligibility.length > 0 && eligibleCount === 0
+          ? 'You’re not eligible for any care package yet, so nothing can be offered to you. Check what’s outstanding under My services.'
+          : 'New visits near you appear here as families book them. Staying marked available helps you see more.',
+    },
+    upcoming: {
+      title: 'No upcoming visits',
+      description: 'Accept a request and it’ll show up here with everything you need for the visit.',
+    },
+    past: {
+      title: 'No past visits yet',
+      description: 'Completed and cancelled visits are kept here for your records.',
+    },
+  };
 
   return (
     <SafeAreaView style={styles.safe} testID="assignments-screen" edges={['top']}>
       <OfflineBanner />
-      <Header title="My Assignments" showBack={false} />
-      <View style={styles.tabs}>
-        <TouchableOpacity
-          style={[styles.tab, tab === 'today' && styles.tabActive]}
-          onPress={() => setTab('today')}
-          testID="tab-today"
-        >
-          <Text style={[styles.tabTxt, tab === 'today' && { color: Colors.teal }]} numberOfLines={1}>
-            Today
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, tab === 'requests' && styles.tabActive]}
-          onPress={() => setTab('requests')}
-          testID="tab-requests"
-        >
-          <Text style={[styles.tabTxt, tab === 'requests' && { color: Colors.teal }]} numberOfLines={1}>
-            Requests {newRequests.length > 0 ? `(${newRequests.length})` : ''}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, tab === 'past' && styles.tabActive]}
-          onPress={() => setTab('past')}
-          testID="tab-past"
-        >
-          <Text style={[styles.tabTxt, tab === 'past' && { color: Colors.teal }]} numberOfLines={1}>
-            Past {pastList.length > 0 ? `(${pastList.length})` : ''}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <Header title="My visits" showBack={false} />
 
-      {data.length === 0 ? (
-        <EmptyState
-          title={
-            tab === 'today'
-              ? 'All clear!'
-              : tab === 'requests'
-              ? 'No new requests'
-              : 'No past visits yet'
-          }
-          description={
-            tab === 'today'
-              ? 'No visits scheduled today.'
-              : tab === 'requests'
-              ? 'You’re all caught up.'
-              : 'Completed visits will appear here.'
-          }
-          icon="checkmark-circle-outline"
-        />
-      ) : (
-        <FlatList
-          data={data}
-          keyExtractor={(i) => i.id}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 100 }}
-          renderItem={({ item }) => (
+      <View style={styles.tabs}>
+        {TABS.map((t) => {
+          const count =
+            t.id === 'requests' ? newRequests.length : t.id === 'upcoming' ? upcoming.length : 0;
+          return (
             <TouchableOpacity
-              activeOpacity={tab === 'past' ? 0.7 : 1}
-              onPress={
-                tab === 'past'
-                  ? () => router.push({ pathname: '/nurse-visit/[id]', params: { id: item.id } })
-                  : undefined
-              }
-              style={styles.card}
-              testID={tab === 'past' ? `past-visit-${item.id}` : undefined}
+              key={t.id}
+              style={[styles.tab, tab === t.id && styles.tabActive]}
+              onPress={() => setTab(t.id)}
+              testID={`tab-${t.id}`}
             >
-              <View style={styles.row}>
-                <View
-                  style={[
-                    styles.timeChip,
-                    tab === 'past' && { backgroundColor: Colors.successBg },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.timeChipTxt,
-                      tab === 'past' && { color: Colors.success },
-                    ]}
-                  >
-                    {tab === 'past' ? 'Done' : item.slot}
-                  </Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.title}>{item.careTitle}</Text>
-                  <Text style={styles.sub}>
-                    {new Date(item.date).toLocaleDateString('en-IN', {
-                      weekday: 'short',
-                      day: '2-digit',
-                      month: 'short',
-                    })}{' '}
-                    · {item.duration}h{tab === 'past' ? ` · ${item.slot}` : ''}
-                  </Text>
-                </View>
-                <Text style={styles.amount}>₹{item.netCost}</Text>
-              </View>
-              <View style={styles.addressRow}>
-                <Ionicons name="location-outline" size={14} color={Colors.textTertiary} />
-                <Text style={styles.address} numberOfLines={1}>
-                  {item.address}
-                </Text>
-                {/* Patch 3 — optional distance chip (only when backend provided distance_km). */}
-                {typeof item.distanceKm === 'number' && (
-                  <View style={styles.distanceChip} testID={`distance-${item.id}`}>
-                    <MaterialCommunityIcons name="map-marker-distance" size={12} color={Colors.primary} />
-                    <Text style={styles.distanceChipTxt}>{item.distanceKm.toFixed(1)} km</Text>
-                  </View>
-                )}
-              </View>
-              {item.notes && tab !== 'past' && (
-                <View style={styles.notesRow}>
-                  <MaterialCommunityIcons name="note-text-outline" size={14} color={Colors.warning} />
-                  <Text style={styles.notes}>{item.notes}</Text>
-                </View>
-              )}
-              {tab !== 'past' && (
-                <View style={styles.actions}>
-                  {tab === 'today' ? (
-                    <>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: Colors.successBg }]}
-                        onPress={() =>
-                          Alert.alert('Calling patient', `Connecting to ${item.address}…`)
-                        }
-                        testID={`call-${item.id}`}
-                      >
-                        <Ionicons name="call" size={16} color={Colors.success} />
-                        <Text style={[styles.actionTxt, { color: Colors.success }]}>Call</Text>
-                      </TouchableOpacity>
-                      {/* Patch 3 — Google Maps deep link on assigned booking. */}
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: Colors.infoBg }]}
-                        onPress={() => openInGoogleMaps(item.latitude, item.longitude, item.address)}
-                        testID={`maps-${item.id}`}
-                      >
-                        <Ionicons name="navigate" size={16} color={Colors.primary} />
-                        <Text style={[styles.actionTxt, { color: Colors.primary }]}>Maps</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: Colors.teal }]}
-                        onPress={() =>
-                          router.push({ pathname: '/nurse-visit/[id]', params: { id: item.id } })
-                        }
-                        testID={`view-${item.id}`}
-                      >
-                        <Ionicons name="arrow-forward" size={16} color="#fff" />
-                        <Text style={[styles.actionTxt, { color: '#fff' }]}>View visit</Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : (
-                    <>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: Colors.errorBg }]}
-                        onPress={() => declineLocal(item.id)}
-                        testID={`decline-${item.id}`}
-                      >
-                        <Ionicons name="close" size={16} color={Colors.error} />
-                        <Text style={[styles.actionTxt, { color: Colors.error }]}>Decline</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
-                          styles.actionBtn,
-                          { backgroundColor: Colors.success },
-                          acceptingIds.has(item.id) && { opacity: 0.6 },
-                        ]}
-                        disabled={acceptingIds.has(item.id)}
-                        onPress={() => handleAccept(item.id)}
-                        testID={`accept-${item.id}`}
-                      >
-                        <Ionicons name="checkmark" size={16} color="#fff" />
-                        <Text style={[styles.actionTxt, { color: '#fff' }]}>
-                          {acceptingIds.has(item.id) ? 'Accepting…' : 'Accept'}
-                        </Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                </View>
-              )}
-              {tab === 'past' && (
-                <View style={styles.pastFooter}>
-                  <View style={styles.pastBadge}>
-                    <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                    <Text style={styles.pastBadgeTxt}>Care notes saved</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.textTertiary} />
+              <Text style={[styles.tabTxt, tab === t.id && styles.tabTxtActive]}>{t.label}</Text>
+              {count > 0 && (
+                <View style={[styles.count, tab === t.id && styles.countActive]}>
+                  <Text style={[styles.countTxt, tab === t.id && { color: '#fff' }]}>{count}</Text>
                 </View>
               )}
             </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <AsyncBoundary
+        state={state}
+        isEmpty={rows.length === 0}
+        emptyTitle={emptyCopy[tab].title}
+        emptyDescription={emptyCopy[tab].description}
+        emptyIcon={tab === 'requests' ? 'notifications-outline' : 'calendar-outline'}
+        emptyCtaTitle={
+          tab === 'requests' && eligibility.length > 0 && eligibleCount === 0
+            ? 'Check my services'
+            : undefined
+        }
+        onEmptyCtaPress={() => router.push('/service-preferences')}
+        onRetry={onRefresh}
+      >
+        <FlatList
+          data={rows}
+          keyExtractor={(b) => b.id}
+          contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 100 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          renderItem={({ item }) => (
+            <VisitRow
+              booking={item}
+              mode={tab}
+              busy={busyIds.has(item.id)}
+              onOpen={() =>
+                router.push({ pathname: '/nurse-visit/[id]', params: { id: item.id } })
+              }
+              onAccept={() => accept(item)}
+              onCancel={() => cancel(item)}
+              onNavigate={() => openInMaps(item.latitude, item.longitude)}
+            />
           )}
         />
-      )}
+      </AsyncBoundary>
     </SafeAreaView>
   );
 }
 
+const VisitRow: React.FC<{
+  booking: Booking;
+  mode: Tab;
+  busy: boolean;
+  onOpen: () => void;
+  onAccept: () => void;
+  onCancel: () => void;
+  onNavigate: () => void;
+}> = ({ booking, mode, busy, onOpen, onAccept, onCancel, onNavigate }) => {
+  const cancellable = mode === 'upcoming' && canNurseCancel(booking);
+
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.85}
+      onPress={mode === 'requests' ? undefined : onOpen}
+      testID={`visit-${booking.id}`}
+    >
+      <View style={styles.cardHead}>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text style={styles.title}>{booking.careTitle}</Text>
+          <Text style={styles.sub}>
+            {formatDay(booking.date)} · {formatTime(booking.slot)} · {booking.duration}h
+          </Text>
+        </View>
+        {mode === 'requests' ? (
+          booking.isUrgent ? (
+            <View style={styles.urgentChip}>
+              <Ionicons name="flash" size={11} color={Colors.warning} />
+              <Text style={styles.urgentTxt}>Urgent</Text>
+            </View>
+          ) : null
+        ) : (
+          <BookingStatusBadge status={booking.rawStatus} />
+        )}
+      </View>
+
+      <View style={styles.metaRow}>
+        <Ionicons name="location-outline" size={14} color={Colors.textTertiary} />
+        <Text style={styles.address} numberOfLines={2}>
+          {booking.address}
+        </Text>
+      </View>
+
+      {typeof booking.distanceKm === 'number' && (
+        <View style={styles.metaRow}>
+          <Ionicons name="navigate-outline" size={14} color={Colors.textTertiary} />
+          <Text style={styles.address}>{booking.distanceKm.toFixed(1)} km away</Text>
+        </View>
+      )}
+
+      {!!booking.notes && (
+        <View style={styles.notesBox}>
+          <Text style={styles.notesTxt} numberOfLines={3}>
+            {booking.notes}
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.footer}>
+        <View>
+          <Text style={styles.payLabel}>Visit value</Text>
+          <Text style={styles.pay}>{inr(booking.netCost)}</Text>
+        </View>
+
+        <View style={styles.btnRow}>
+          {mode === 'requests' ? (
+            <TouchableOpacity
+              style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+              onPress={onAccept}
+              disabled={busy}
+              testID={`accept-${booking.id}`}
+            >
+              <Text style={styles.primaryTxt}>{busy ? 'Accepting…' : 'Accept'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity style={styles.iconBtn} onPress={onNavigate} testID="navigate">
+                <Ionicons name="navigate" size={17} color={Colors.primary} />
+              </TouchableOpacity>
+              {cancellable && (
+                <TouchableOpacity
+                  style={[styles.iconBtn, { backgroundColor: Colors.errorBg }]}
+                  onPress={onCancel}
+                  disabled={busy}
+                  testID={`cancel-${booking.id}`}
+                >
+                  <Ionicons name="close" size={17} color={Colors.danger} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.primaryBtn} onPress={onOpen}>
+                <Text style={styles.primaryTxt}>Open</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </View>
+
+      {mode === 'upcoming' && !cancellable && !['completed', 'cancelled'].includes(booking.rawStatus) && (
+        <Text style={styles.lockedTxt}>
+          Cancellation window has closed — contact support if you can’t attend.
+        </Text>
+      )}
+    </TouchableOpacity>
+  );
+};
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  tabs: { flexDirection: 'row', marginHorizontal: Spacing.lg, marginVertical: 8, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.lg, padding: 4 },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.md },
+  tabs: {
+    flexDirection: 'row',
+    marginHorizontal: Spacing.lg,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.lg,
+    padding: 4,
+    marginVertical: 8,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    borderRadius: Radius.md,
+  },
   tabActive: { backgroundColor: Colors.surface },
   tabTxt: { ...Typography.small, color: Colors.textSecondary, fontWeight: '600' as const },
-  card: { backgroundColor: Colors.surface, borderRadius: Radius.xl, padding: 14, marginBottom: 12, ...Shadows.card },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  timeChip: { backgroundColor: Colors.infoBg, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.md },
-  timeChipTxt: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
-  title: { ...Typography.bodyBold, color: Colors.textPrimary },
-  sub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
-  amount: { ...Typography.h4, color: Colors.success, fontWeight: '800' as const },
-  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-  address: { ...Typography.small, color: Colors.textTertiary, flex: 1 },
-  distanceChip: {
+  tabTxtActive: { color: Colors.teal },
+  count: {
+    minWidth: 18,
+    paddingHorizontal: 5,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.divider,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countActive: { backgroundColor: Colors.teal },
+  countTxt: {
+    ...Typography.caption,
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: '700' as const,
+  },
+  card: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.card,
+    marginBottom: Spacing.md,
+    ...Shadows.card,
+  },
+  cardHead: { flexDirection: 'row', alignItems: 'flex-start' },
+  title: { ...Typography.h4, color: Colors.textPrimary },
+  sub: { ...Typography.small, color: Colors.textSecondary, marginTop: 3 },
+  urgentChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: Colors.infoBg,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: Radius.pill,
-    marginLeft: 6,
-  },
-  distanceChipTxt: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const, fontSize: 11 },
-  notesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
     backgroundColor: Colors.warningBg,
-    padding: 8,
-    borderRadius: Radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
   },
-  notes: { ...Typography.small, color: Colors.warning, flex: 1 },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
+  urgentTxt: { ...Typography.caption, color: Colors.warning, fontWeight: '700' as const },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  address: { ...Typography.small, color: Colors.textSecondary, flex: 1 },
+  notesBox: {
+    backgroundColor: Colors.surfaceAlt,
     borderRadius: Radius.md,
-    gap: 6,
+    padding: 10,
+    marginTop: 10,
   },
-  actionTxt: { ...Typography.bodyBold, fontWeight: '700' as const },
-  pastFooter: {
+  notesTxt: { ...Typography.small, color: Colors.textSecondary, lineHeight: 17 },
+  footer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 12,
-    paddingTop: 12,
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
     borderTopWidth: 1,
     borderTopColor: Colors.divider,
   },
-  pastBadge: {
-    flexDirection: 'row',
+  payLabel: { ...Typography.caption, color: Colors.textTertiary },
+  pay: { ...Typography.h4, color: Colors.textPrimary, fontWeight: '800' as const, marginTop: 2 },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.infoBg,
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.successBg,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    justifyContent: 'center',
+  },
+  primaryBtn: {
+    backgroundColor: Colors.teal,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     borderRadius: Radius.pill,
   },
-  pastBadgeTxt: { ...Typography.small, color: Colors.success, fontWeight: '700' as const },
+  primaryTxt: { ...Typography.small, color: '#fff', fontWeight: '700' as const },
+  lockedTxt: { ...Typography.caption, color: Colors.textTertiary, marginTop: 10, lineHeight: 16 },
 });

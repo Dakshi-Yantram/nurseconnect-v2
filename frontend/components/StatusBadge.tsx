@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Colors, Radius, Typography, StatusStyles, StatusKey } from '../constants/theme';
+import { Radius, Typography, StatusStyles, StatusKey } from '../constants/theme';
 
 interface Props {
   status: StatusKey;
