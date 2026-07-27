@@ -12,7 +12,7 @@
     "lint": "expo lint"
   },
   "dependencies": {
-    "@config-plugins/react-native-callkeep": "^14.0.1",
+    "@config-plugins/react-native-callkeep": "^12.0.0",
     "@dyteinternals/react-native-webrtc": "^114.0.16",
     "@dytesdk/react-native-core": "^1.0.2",
     "@expo/metro-runtime": "6.1.2",

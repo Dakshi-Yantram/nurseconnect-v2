@@ -8,7 +8,6 @@
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
-        "// note": "VoIP push and CallKit do not work in the iOS Simulator — PushKit is device-only. Build for a real device.",
         "simulator": false
       },
       "env": {
