@@ -2,8 +2,18 @@ export const Colors = {
   primary: "#2563EB",
   primaryDark: "#1E3A8A",
   accent: "#8B5CF6",
+  accentDark: "#6D28D9",
   teal: "#14B8A6",
+
+  success: "#16A34A",
+  successBg: "#DCFCE7",
+  warning: "#D97706",
+  warningBg: "#FEF3C7",
   error: "#EF4444",
+  errorBg: "#FEE2E2",
+  danger: "#DC2626",
+  info: "#2563EB",
+  infoBg: "#DBEAFE",
 
   bgApp: "#F8FAFC",
   surface: "#FFFFFF",
@@ -14,7 +24,7 @@ export const Colors = {
   textTertiary: "#94A3B8",
 
   divider: "#E2E8F0",
-  infoBg: "#DBEAFE",
+  border: "#E2E8F0",
 };
 
 export const Gradients = {
@@ -28,14 +38,23 @@ export const Gradients = {
 };
 
 export const Radius = {
+  sm: 8,
+  md: 12,
   lg: 16,
   xl: 24,
   pill: 999,
 };
 
 export const Spacing = {
+  xs: 4,
+  sm: 8,
   md: 16,
   lg: 24,
+  xl: 32,
+  /** Standard horizontal gutter for full-screen content. */
+  screen: 20,
+  /** Internal padding for cards / list rows. */
+  card: 16,
 };
 
 export const Typography = {
@@ -54,6 +73,10 @@ export const Typography = {
   h4: {
     fontSize: 18,
     fontWeight: "600" as const,
+  },
+  body: {
+    fontSize: 15,
+    fontWeight: "400" as const,
   },
   bodyBold: {
     fontSize: 16,
@@ -84,6 +107,7 @@ export const Shadows = {
     elevation: 6,
   },
 };
+
 export type StatusKey =
   | "scheduled"
   | "enroute"

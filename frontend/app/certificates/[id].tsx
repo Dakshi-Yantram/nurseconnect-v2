@@ -1,98 +1,218 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+/**
+ * Certificate detail.
+ *
+ * Looked up from the worker's own certificate list — the backend has no
+ * per-certificate endpoint. Only offers to open the hosted file when one
+ * actually exists, rather than showing a download button that does nothing.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Linking,
+  Alert,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Header } from '../../components/Header';
 import { GradientButton } from '../../components/GradientButton';
 import { OfflineBanner } from '../../components/OfflineBanner';
-import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
-import { CERTIFICATES } from '../../mock-data/abha';
+import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
+import { workerSelfService, type CertificateOut } from '../../services/worker-self.service';
+import { certificateStatus, CERT_TONE } from '../certificates';
+import { formatDay } from '../../lib/format';
 
-export default function CertDetail() {
+export default function CertificateDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const c = CERTIFICATES.find((x) => x.id === id) || CERTIFICATES[0];
-  if (!c) return null;
+  const [certificate, setCertificate] = useState<CertificateOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const rows = await workerSelfService.certificates();
+      setCertificate(rows.find((c) => c.id === id) ?? null);
+      if (!rows.some((c) => c.id === id)) setError('This certificate could not be found.');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load this certificate');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <Header title="Certificate" fallbackHref="/certificates" />
+        <View style={styles.centered}>
+          <ActivityIndicator color={Colors.teal} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!certificate) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <Header title="Certificate" fallbackHref="/certificates" />
+        <View style={styles.centered}>
+          <Ionicons name="ribbon-outline" size={40} color={Colors.textTertiary} />
+          <Text style={styles.errorTxt}>{error}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const status = certificateStatus(certificate);
+  const tone = CERT_TONE[status];
+
   return (
-    <SafeAreaView style={styles.safe} testID="cert-detail" edges={['top']}>
+    <SafeAreaView style={styles.safe} testID="certificate-detail" edges={['top']}>
       <OfflineBanner />
       <Header title="Certificate" fallbackHref="/certificates" />
-      <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40 }}>
-        <LinearGradient
-          colors={Gradients.accent as any}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          <FontAwesome5 name="award" size={48} color="#fff" />
-          <Text style={styles.title}>{c.title}</Text>
-          <Text style={styles.issuer}>Issued by {c.issuedBy}</Text>
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <View>
-              <Text style={styles.lab}>Cert #</Text>
-              <Text style={styles.val}>{c.certNumber}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.lab}>Issued</Text>
-              <Text style={styles.val}>
-                {new Date(c.issuedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-              </Text>
-            </View>
+      <ScrollView contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 60 }}>
+        <View style={styles.card}>
+          <View style={[styles.hero, { backgroundColor: tone.bg }]}>
+            <FontAwesome5 name="award" size={40} color={tone.fg} />
           </View>
-          {c.expiryDate && (
-            <View style={styles.row}>
-              <View>
-                <Text style={styles.lab}>Expires</Text>
-                <Text style={styles.val}>
-                  {new Date(c.expiryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                </Text>
-              </View>
-              <View style={[styles.badge, { backgroundColor: c.status === 'active' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)' }]}>
-                <Text style={styles.badgeTxt}>{c.status}</Text>
-              </View>
-            </View>
-          )}
-        </LinearGradient>
+          <Text style={styles.title}>{certificate.name}</Text>
+          {!!certificate.issued_by && <Text style={styles.sub}>{certificate.issued_by}</Text>}
+          <View style={[styles.badge, { backgroundColor: tone.bg }]}>
+            <Text style={[styles.badgeTxt, { color: tone.fg }]}>{tone.label}</Text>
+          </View>
+        </View>
 
-        <GradientButton
-          title="Download as PDF"
-          onPress={() => Alert.alert('Downloaded', `${c.title}.pdf saved`)}
-          testID="download-pdf"
-          style={{ marginTop: 16 }}
-          icon={<Ionicons name="download-outline" size={18} color="#fff" />}
-        />
-        <GradientButton
-          title="Share"
-          variant="outline"
-          onPress={() => Alert.alert('Shared', 'Link sent via WhatsApp')}
-          testID="share-cert"
-          style={{ marginTop: 8 }}
-        />
-        {c.status === 'expiring' && (
+        <View style={styles.section}>
+          <Text style={styles.secTitle}>Details</Text>
+          {!!certificate.issued_on && (
+            <Row label="Issued" value={formatDay(certificate.issued_on.slice(0, 10))} />
+          )}
+          {!!certificate.valid_until && (
+            <Row label="Valid until" value={formatDay(certificate.valid_until.slice(0, 10))} />
+          )}
+          {!certificate.valid_until && <Row label="Validity" value="No expiry" />}
+        </View>
+
+        {status === 'expired' && (
+          <View style={styles.warnCard}>
+            <Ionicons name="warning" size={18} color={Colors.danger} />
+            <Text style={styles.warnTxt}>
+              This certificate has lapsed. Any care package that requires it is closed to you
+              until it’s renewed and re-verified.
+            </Text>
+          </View>
+        )}
+        {status === 'expiring' && (
+          <View style={[styles.warnCard, { backgroundColor: Colors.warningBg }]}>
+            <Ionicons name="time" size={18} color={Colors.warning} />
+            <Text style={[styles.warnTxt, { color: Colors.warning }]}>
+              Renew this before it expires so you don’t lose access to the packages that need it.
+            </Text>
+          </View>
+        )}
+
+        {certificate.cloudinary_url ? (
           <GradientButton
-            title="Renew certificate"
-            variant="accent"
-            onPress={() => Alert.alert('Renewal scheduled', 'Renewal reminder set for next week')}
-            testID="renew-cert"
-            style={{ marginTop: 8 }}
+            title="Open certificate"
+            onPress={() =>
+              Linking.openURL(certificate.cloudinary_url!).catch(() =>
+                Alert.alert('Could not open', 'The certificate link appears to be invalid.'),
+              )
+            }
+            style={{ marginTop: Spacing.md }}
+            icon={<Ionicons name="open-outline" size={18} color="#fff" />}
+            testID="cert-open"
           />
+        ) : (
+          <View style={styles.noFile}>
+            <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
+            <Text style={styles.noFileTxt}>
+              No file is attached to this certificate — only the details above.
+            </Text>
+          </View>
         )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <View style={styles.kv}>
+    <Text style={styles.k}>{label}</Text>
+    <Text style={styles.v}>{value}</Text>
+  </View>
+);
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
-  hero: { padding: 24, borderRadius: Radius.xl, alignItems: 'center', ...Shadows.floating },
-  title: { ...Typography.h2, color: '#fff', fontWeight: '800' as const, marginTop: 16, textAlign: 'center' },
-  issuer: { ...Typography.body, color: 'rgba(255,255,255,0.85)', marginTop: 4 },
-  divider: { width: '100%', height: 1, backgroundColor: 'rgba(255,255,255,0.25)', marginVertical: 16 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingVertical: 4 },
-  lab: { ...Typography.caption, color: 'rgba(255,255,255,0.85)' },
-  val: { ...Typography.bodyBold, color: '#fff', marginTop: 2 },
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.pill },
-  badgeTxt: { ...Typography.caption, color: '#fff', fontWeight: '700' as const, textTransform: 'capitalize' },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
+  errorTxt: {
+    ...Typography.body,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: Spacing.md,
+  },
+  card: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    ...Shadows.card,
+  },
+  hero: {
+    width: 84,
+    height: 84,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: { ...Typography.h3, color: Colors.textPrimary, marginTop: 14, textAlign: 'center' },
+  sub: { ...Typography.body, color: Colors.textSecondary, marginTop: 4 },
+  badge: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: Radius.pill,
+    marginTop: Spacing.md,
+  },
+  badgeTxt: { ...Typography.small, fontWeight: '700' as const },
+  section: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.card,
+    marginTop: Spacing.md,
+    ...Shadows.card,
+  },
+  secTitle: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 8 },
+  kv: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, paddingVertical: 6 },
+  k: { ...Typography.body, color: Colors.textSecondary },
+  v: { ...Typography.bodyBold, color: Colors.textPrimary },
+  warnCard: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+    backgroundColor: Colors.errorBg,
+    borderRadius: Radius.md,
+    padding: 12,
+    marginTop: Spacing.md,
+  },
+  warnTxt: { ...Typography.small, color: Colors.danger, flex: 1, lineHeight: 18 },
+  noFile: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.md,
+    padding: 12,
+    marginTop: Spacing.md,
+  },
+  noFileTxt: { ...Typography.small, color: Colors.textSecondary, flex: 1, lineHeight: 17 },
 });

@@ -12,11 +12,31 @@ import { authStorage } from './auth-storage';
 const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 export const API_BASE = BASE_URL ? `${BASE_URL}/api` : '/api';
 
+if (!BASE_URL && __DEV__) {
+  // A relative "/api" only resolves when the app is served from the same
+  // origin as the backend (i.e. `expo start --web`). On a device or simulator
+  // every request fails with an opaque network error, which is very hard to
+  // diagnose from the UI — so say it plainly at startup.
+  console.warn(
+    '[NurseConnect] EXPO_PUBLIC_BACKEND_URL is not set — API calls will fail on a device. ' +
+      'Copy .env.example to .env and point it at your backend.',
+  );
+}
+
 export interface APIError {
   status: number;
   message: string;
   detail?: unknown;
   network?: boolean;
+}
+
+/**
+ * Our request config adds `skipAuth` for the auth endpoints, which must not
+ * carry a stale (or about-to-be-rotated) Authorization header.
+ */
+export interface NCRequestConfig extends InternalAxiosRequestConfig {
+  skipAuth?: boolean;
+  _retry?: boolean;
 }
 
 function normaliseError(err: unknown): APIError {
@@ -42,9 +62,8 @@ const client: AxiosInstance = axios.create({
 });
 
 // ---- REQUEST: attach access token ----
-client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+client.interceptors.request.use(async (config: NCRequestConfig) => {
   // Allow opt-out via flag (e.g. auth endpoints don't need an existing token)
-  // @ts-expect-error custom flag
   if (config.skipAuth) return config;
   const token = await authStorage.getAccessToken();
   if (token) {
@@ -85,12 +104,19 @@ async function performRefresh(): Promise<string | null> {
 client.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
-    const cfg = error.config as InternalAxiosRequestConfig & { _retry?: boolean; skipAuth?: boolean };
+    const cfg = error.config as NCRequestConfig | undefined;
     if (error.response?.status === 401 && cfg && !cfg._retry && !cfg.skipAuth) {
       cfg._retry = true;
-      if (!refreshInFlight) refreshInFlight = performRefresh();
+      // Single-flight: the backend rotates (and revokes) the refresh token on
+      // every use, so two parallel refreshes would invalidate each other and
+      // sign the user out. Clearing the slot inside `finally` — rather than
+      // after the await — keeps every concurrent caller on the same promise.
+      if (!refreshInFlight) {
+        refreshInFlight = performRefresh().finally(() => {
+          refreshInFlight = null;
+        });
+      }
       const newToken = await refreshInFlight;
-      refreshInFlight = null;
       if (newToken) {
         cfg.headers = cfg.headers || {};
         (cfg.headers as any).Authorization = `Bearer ${newToken}`;
@@ -104,17 +130,42 @@ client.interceptors.response.use(
   }
 );
 
+/** Public request options — plain axios config plus our `skipAuth` flag. */
+export type RequestOptions = AxiosRequestConfig & { skipAuth?: boolean };
+
 export const api = {
-  get: <T = any>(url: string, config?: AxiosRequestConfig) =>
+  get: <T = any>(url: string, config?: RequestOptions) =>
     client.get<T>(url, config).then((r) => r.data),
-  post: <T = any>(url: string, body?: any, config?: AxiosRequestConfig) =>
+  post: <T = any>(url: string, body?: any, config?: RequestOptions) =>
     client.post<T>(url, body, config).then((r) => r.data),
-  put: <T = any>(url: string, body?: any, config?: AxiosRequestConfig) =>
+  put: <T = any>(url: string, body?: any, config?: RequestOptions) =>
     client.put<T>(url, body, config).then((r) => r.data),
-  patch: <T = any>(url: string, body?: any, config?: AxiosRequestConfig) =>
+  patch: <T = any>(url: string, body?: any, config?: RequestOptions) =>
     client.patch<T>(url, body, config).then((r) => r.data),
-  delete: <T = any>(url: string, config?: AxiosRequestConfig) =>
+  delete: <T = any>(url: string, config?: RequestOptions) =>
     client.delete<T>(url, config).then((r) => r.data),
+
+  /**
+   * Multipart upload for the document / photo endpoints. React Native's
+   * FormData needs the `{ uri, name, type }` shape, and the boundary must be
+   * left to the runtime — setting Content-Type by hand breaks the upload.
+   */
+  upload: <T = any>(
+    url: string,
+    file: { uri: string; name: string; type: string },
+    fields?: Record<string, string>,
+    fileField = 'file',
+  ) => {
+    const form = new FormData();
+    form.append(fileField, file as any);
+    for (const [k, v] of Object.entries(fields ?? {})) form.append(k, v);
+    return client
+      .post<T>(url, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 60000,
+      })
+      .then((r) => r.data);
+  },
 };
 
 export { client as rawClient };

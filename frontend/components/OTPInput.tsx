@@ -10,7 +10,7 @@ interface Props {
 }
 
 export const OTPInput: React.FC<Props> = ({ length = 4, value, onChange, testID }) => {
-  const refs = useRef<Array<TextInput | null>>([]);
+  const refs = useRef<(TextInput | null)[]>([]);
 
   const handleChange = (txt: string, idx: number) => {
     const next = value.split('');

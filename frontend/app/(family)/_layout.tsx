@@ -2,8 +2,11 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors } from '../../constants/theme';
+import { useRequireRole } from '../../lib/use-require-role';
 
 export default function FamilyLayout() {
+  useRequireRole('family');
+
   return (
     <Tabs
       screenOptions={{

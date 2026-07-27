@@ -51,6 +51,7 @@ import { GradientButton } from '../../components/GradientButton';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { api } from '../../lib/api';
 import { useStore } from '../../store';
+import { callManager } from '../../lib/call-manager';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface VisitRecord {
@@ -91,9 +92,10 @@ export default function NurseVisitScreen() {
   const [verifying, setVerifying] = useState(false);
   const [loadError, setLoadError] = useState('');
 
-  // Find the booking in the store for patient / service info
-  // NOTE: Booking shape (from ../types) uses careTitle / nurseName / address —
-  // not service / patientName / nested address.
+  // Find the booking in the store for patient / service info.
+  // NOTE: `nurseName` on a Booking is the assigned NURSE — the person being
+  // cared for is `patientName`, which the backend populates on the booking
+  // list/detail endpoints.
   const assignments = useStore((s) => s.assignments);
   const booking = assignments.find((a) => a.id === bookingId);
 
@@ -156,6 +158,9 @@ export default function NurseVisitScreen() {
       });
       setVisit(record);
       setPhase('active');
+      // Refresh the assignment list so the dashboard and Visits tab reflect
+      // the in-progress state rather than still showing "assigned".
+      useStore.getState().refreshAssignmentsAPI().catch(() => {});
     } catch (e: any) {
       const code = e?.detail?.code || e?.code;
       if (code === 'OTP_INVALID') {
@@ -255,7 +260,7 @@ export default function NurseVisitScreen() {
             {/* Booking info */}
             {booking && (
               <View style={styles.bookingCard}>
-                <Text style={styles.bookingPatient}>{booking.nurseName ?? 'Patient'}</Text>
+                <Text style={styles.bookingPatient}>{booking.patientName || 'Patient'}</Text>
                 <Text style={styles.bookingService}>{booking.careTitle ?? ''}</Text>
                 <Text style={styles.bookingAddress}>{booking.address ?? ''}</Text>
               </View>
@@ -325,10 +330,37 @@ export default function NurseVisitScreen() {
         {/* Patient info */}
         {booking && (
           <View style={styles.bookingCard}>
-            <Text style={styles.bookingPatient}>{booking.nurseName ?? 'Patient'}</Text>
+            <Text style={styles.bookingPatient}>{booking.patientName || 'Patient'}</Text>
             <Text style={styles.bookingService}>{booking.careTitle ?? ''}</Text>
+            <Text style={styles.bookingAddress}>{booking.address ?? ''}</Text>
           </View>
         )}
+
+        {/* Reach the family without leaving the visit */}
+        <TouchableOpacity
+          style={styles.messageBtn}
+          onPress={() =>
+            router.push({ pathname: '/chat/[bookingId]', params: { bookingId: bookingId! } })
+          }
+          testID="visit-message-family"
+        >
+          <Ionicons name="chatbubbles-outline" size={18} color={Colors.primary} />
+          <Text style={styles.messageTxt}>Message the family</Text>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textTertiary} />
+        </TouchableOpacity>
+
+        {/* Voice call the family — same Dyte meeting the consumer app joins. */}
+        <TouchableOpacity
+          style={styles.messageBtn}
+          onPress={() =>
+            callManager.startCall(bookingId!, booking?.patientName || 'the family')
+          }
+          testID="visit-call-family"
+        >
+          <Ionicons name="call-outline" size={18} color={Colors.success} />
+          <Text style={styles.messageTxt}>Call the family</Text>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textTertiary} />
+        </TouchableOpacity>
 
         {/* Quick actions */}
         <Text style={styles.sectionLabel}>Clinical actions</Text>
@@ -464,6 +496,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionLabel: { ...Typography.small, fontWeight: '600' as const, textAlign: 'center' },
+
+  messageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginTop: Spacing.md,
+    ...Shadows.card,
+  },
+  messageTxt: { ...Typography.body, color: Colors.textPrimary, flex: 1 },
 
   endBtn: {
     flexDirection: 'row',

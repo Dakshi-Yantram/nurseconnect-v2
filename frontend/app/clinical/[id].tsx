@@ -329,7 +329,7 @@ export default function ClinicalDocumentation() {
   if (workflowError) {
     return (
       <SafeAreaView style={styles.safe} testID="clinical-doc-error" edges={['top']}>
-        <Header title="Clinical Documentation" onLeftPress={() => router.back()} />
+        <Header title="Clinical Documentation" />
         <View style={styles.errorCard} testID="workflow-error">
           <Ionicons name="warning" size={28} color={Colors.danger} />
           <Text style={styles.errorCode}>{workflowError.code}</Text>
