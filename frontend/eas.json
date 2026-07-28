@@ -20,13 +20,13 @@
         "simulator": false
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://staging-api.nurseconnect.example.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.nurseconnect.co.in"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://api.nurseconnect.example.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.nurseconnect.co.in"
       }
     }
   },
