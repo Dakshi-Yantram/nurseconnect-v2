@@ -1,7 +1,7 @@
 /**
  * Guarded access to the calling-related native modules.
  *
- * CallKit/PushKit/ConnectionService, Firebase Messaging and the Dyte SDK are
+ * CallKit/PushKit/ConnectionService, Firebase Messaging and the RealtimeKit SDK are
  * all native — they exist only in a custom dev build or a store build, never
  * in Expo Go. Importing them statically makes the whole app crash on launch
  * inside Expo Go, which would take down every screen for the sake of a
@@ -70,20 +70,23 @@ export function getMessaging(): any | null {
   return _messaging;
 }
 
-/** @dytesdk/react-native-core — the audio/video engine itself. */
-export function getDyte(): any | null {
+/** @cloudflare/realtimekit-react-native — the audio engine itself. */
+export function getRealtimeKit(): any | null {
   if (_dyte === undefined) {
-    _dyte = safeRequire(() => require('@dytesdk/react-native-core'), '@dytesdk/react-native-core');
+    _dyte = safeRequire(
+      () => require('@cloudflare/realtimekit-react-native'),
+      '@cloudflare/realtimekit-react-native',
+    );
   }
   return _dyte;
 }
 
 /**
  * Whether this build can place and receive in-app calls at all.
- * The Dyte SDK is the hard requirement — without it there is no audio.
+ * The RealtimeKit SDK is the hard requirement — without it there is no audio.
  */
 export function callingSupported(): boolean {
-  return getDyte() !== null;
+  return getRealtimeKit() !== null;
 }
 
 /**

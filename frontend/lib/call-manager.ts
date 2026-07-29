@@ -15,7 +15,7 @@
  */
 import { Platform } from 'react-native';
 import { callsService, type CallEndReason, type IncomingCallPayload } from '../services/calls.service';
-import { getCallKeep, getDyte, callingSupported } from './native-modules';
+import { getCallKeep, getRealtimeKit, callingSupported } from './native-modules';
 
 export type CallPhase = 'idle' | 'ringing' | 'connecting' | 'in_call' | 'ended';
 
@@ -277,11 +277,11 @@ class CallManager {
   // ------------------------------------------------------------ internals --
   /** Attach to the Dyte meeting with a participant token. Audio only. */
   private async joinMeeting(authToken: string): Promise<void> {
-    const dyte = getDyte();
-    if (!dyte) throw new Error('Calling is unavailable in this build');
+    const rtk = getRealtimeKit();
+    if (!rtk) throw new Error('Calling is unavailable in this build');
 
-    const DyteClient = dyte.default ?? dyte.DyteClient ?? dyte;
-    const meeting = await DyteClient.init({
+    const RealtimeKitClient = rtk.default ?? rtk.RealtimeKitClient ?? rtk;
+    const meeting = await RealtimeKitClient.init({
       authToken,
       defaults: { audio: true, video: false },
     });
