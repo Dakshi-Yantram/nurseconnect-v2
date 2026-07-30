@@ -43,8 +43,9 @@
     },
     "extra": {
       "router": {},
+      "firebaseConfigured": false,
       "eas": {
-        "projectId": "da0cbe47-ab8e-43f9-966f-d4b83bb90e3b"
+        "projectId": "1375e8db-cf00-4227-a082-3ebd02170b70"
       }
     }
   }

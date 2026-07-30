@@ -35,8 +35,8 @@ const firebaseReady = exists(GOOGLE_SERVICES_ANDROID) && exists(GOOGLE_SERVICES_
 if (!firebaseReady) {
   console.warn(
     '[app.config] Firebase credentials not found — Android call ringing will be ' +
-      'disabled in this build. Add google-services.json and GoogleService-Info.plist ' +
-      'to the app/ directory to enable it.',
+    'disabled in this build. Add google-services.json and GoogleService-Info.plist ' +
+    'to the app/ directory to enable it.',
   );
 }
 
@@ -137,8 +137,7 @@ module.exports = () => ({
 
     extra: {
       router: {},
-      eas: { projectId: 'da0cbe47-ab8e-43f9-966f-d4b83bb90e3b' },
-      // Surfaced to JS so the UI can explain *why* background ringing is off.
+      eas: { projectId: '1375e8db-cf00-4227-a082-3ebd02170b70' },
       firebaseConfigured: firebaseReady,
     },
   },
