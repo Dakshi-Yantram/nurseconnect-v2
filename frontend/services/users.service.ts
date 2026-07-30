@@ -69,8 +69,8 @@ export const usersService = {
       p.relationship_to_consumer || p.relationship,
 
     medical_conditions:
-      typeof p.medical_history === 'string'
-        ? p.medical_history
+      typeof p.medical_conditions === 'string'
+        ? p.medical_conditions
             .split(',')
             .map((s: string) => s.trim())
             .filter(Boolean)
@@ -103,8 +103,8 @@ export const usersService = {
       p.relationship_to_consumer || p.relationship,
 
     medical_conditions:
-      typeof p.medical_history === 'string'
-        ? p.medical_history
+      typeof p.medical_conditions === 'string'
+        ? p.medical_conditions
             .split(',')
             .map((s: string) => s.trim())
             .filter(Boolean)
