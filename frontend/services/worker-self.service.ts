@@ -73,7 +73,8 @@ export interface EarningsOut {
 
 /** One entry in the required-documents catalogue for this worker type. */
 export interface DocumentCatalogueEntry {
-  document_type: string;
+  document_type?: string;
+  type?: string;
   label?: string;
   required?: boolean;
   uploaded?: boolean;
