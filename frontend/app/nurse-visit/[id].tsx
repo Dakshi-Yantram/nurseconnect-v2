@@ -192,17 +192,25 @@ export default function NurseVisitScreen() {
   };
 
   // ── Checkout ───────────────────────────────────────────────────────────────
+  // IMPORTANT: this must NOT navigate straight to the "visit completed"
+  // screen. Doing that used to skip vitals/documentation entirely and never
+  // called the checkout API, so the visit stayed `in_progress` on the server
+  // while the nurse app pretended it was done (and the family never saw a
+  // report because `check_out_at` was never set). Checkout only happens
+  // through /clinical/[id], which submits documentation and calls
+  // completeVisitAPI → POST /visits/{id}/checkout, and the backend itself
+  // will reject the checkout (MANDATORY_DOCUMENTATION_INCOMPLETE) if required
+  // vitals/notes are missing.
   const handleEndVisit = () => {
     Alert.alert(
       'End visit',
-      'Please make sure you have completed all required documentation before ending.',
+      "You'll be taken to the visit documentation. Vitals and required notes must be submitted before the visit can be marked complete.",
       [
-        { text: 'Continue documenting', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'End visit',
-          style: 'destructive',
+          text: 'Continue',
           onPress: () =>
-            router.push({ pathname: '/visit-success/[id]', params: { id: bookingId! } }),
+            router.push({ pathname: '/clinical/[id]', params: { id: bookingId! } }),
         },
       ]
     );

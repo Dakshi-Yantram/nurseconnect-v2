@@ -327,6 +327,9 @@ export default function ClinicalDocumentation() {
   }
 
   if (workflowError) {
+    // Previously this was a dead end: a load failure left the nurse with no
+    // way to retry or get back, and no way to enter vitals/documentation —
+    // the only escape was to force-navigate away from the visit entirely.
     return (
       <SafeAreaView style={styles.safe} testID="clinical-doc-error" edges={['top']}>
         <Header title="Clinical Documentation" />
@@ -334,6 +337,19 @@ export default function ClinicalDocumentation() {
           <Ionicons name="warning" size={28} color={Colors.danger} />
           <Text style={styles.errorCode}>{workflowError.code}</Text>
           <Text style={styles.errorMsg}>{workflowError.message}</Text>
+          <GradientButton
+            title="Try again"
+            onPress={refresh}
+            style={{ marginTop: Spacing.lg }}
+            testID="workflow-error-retry"
+          />
+          <GradientButton
+            title="Back to visit"
+            variant="outline"
+            onPress={() => router.back()}
+            style={{ marginTop: Spacing.md }}
+            testID="workflow-error-back"
+          />
         </View>
       </SafeAreaView>
     );
