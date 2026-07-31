@@ -334,7 +334,7 @@ export default function BookingDetail() {
             <TouchableOpacity
               style={styles.rateRow}
               onPress={() =>
-                router.push({ pathname: '/visit-success/[id]', params: { id: booking.id } })
+                router.push({ pathname: '/visit/rate/[id]', params: { id: booking.id } })
               }
               testID="rate-visit"
             >
