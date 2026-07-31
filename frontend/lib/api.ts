@@ -42,7 +42,11 @@ export interface NCRequestConfig extends InternalAxiosRequestConfig {
 function normaliseError(err: unknown): APIError {
   const e = err as AxiosError<any>;
   if (e.response) {
-    const detail = e.response.data?.detail || e.response.data?.message || e.response.statusText;
+    const rawDetail = e.response.data?.detail ?? e.response.data?.message ?? e.response.statusText;
+    const detail =
+      rawDetail && typeof rawDetail === 'object' && 'message' in rawDetail
+        ? (rawDetail as any).message
+        : rawDetail;
     return {
       status: e.response.status,
       message: typeof detail === 'string' ? detail : 'Request failed',
