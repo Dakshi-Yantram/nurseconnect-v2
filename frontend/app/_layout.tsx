@@ -58,6 +58,7 @@ export default function RootLayout() {
           <Stack.Screen name="consents" />
           <Stack.Screen name="family-members" />
           <Stack.Screen name="visit/[id]" />
+          <Stack.Screen name="visit/rate/[id]" />
           <Stack.Screen name="tracking/[id]" />
           <Stack.Screen name="chat/[bookingId]" />
 
