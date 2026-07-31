@@ -76,12 +76,21 @@ export default function Documents() {
    */
   const rows = useMemo(() => {
     const uploaded = new Map(documents.map((d) => [d.document_type, d]));
-    const required = (onboarding?.documents ?? []).map((entry) => ({
-      type: entry.document_type,
-      label: entry.label || humanize(entry.document_type),
-      required: entry.required !== false,
-      doc: uploaded.get(entry.document_type) ?? null,
-    }));
+    const required = (onboarding?.documents ?? [])
+      .map((entry) => {
+        const documentType = entry.document_type ?? entry.type;
+        if (!documentType) return null;
+        return {
+          type: documentType,
+          label: entry.label || humanize(documentType),
+          required: entry.required !== false,
+          doc: uploaded.get(documentType) ?? null,
+        };
+      })
+      .filter(
+        (entry): entry is { type: string; label: string; required: boolean; doc: DocumentOut | null } =>
+          entry !== null,
+      );
     // Anything uploaded that isn't in the catalogue still deserves a row.
     const extras = documents
       .filter((d) => !required.some((r) => r.type === d.document_type))
@@ -95,6 +104,11 @@ export default function Documents() {
   }, [documents, onboarding]);
 
   const upload = async (documentType: string, label: string) => {
+    if (!documentType) {
+      Alert.alert('Upload failed', 'Document type is missing. Please refresh and try again.');
+      return;
+    }
+
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       Alert.alert(
