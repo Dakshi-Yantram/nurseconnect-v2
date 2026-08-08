@@ -14,6 +14,9 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
+  Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,6 +33,7 @@ import { GradientButton } from '../../components/GradientButton';
 import { InputField } from '../../components/InputField';
 import { OfflineBanner } from '../../components/OfflineBanner';
 import { Colors, Radius, Spacing, Typography } from '../../constants/theme';
+import { resolveMediaUrl } from '../../lib/api';
 import { useStore } from '../../store';
 import {
   CareWorkflow,
@@ -40,6 +44,8 @@ import {
   WorkflowQuestionType,
   careWorkflowService,
 } from '../../services/care-workflow.service';
+
+type PhotoFieldKind = 'checklist' | 'documentation';
 
 type AnyAnswer = any;
 
@@ -179,25 +185,68 @@ export default function ClinicalDocumentation() {
   };
 
   // ------------------------------------------------------------------
-  // Photo upload helper (uses expo-image-picker)
+  // Photo capture / upload (uses expo-image-picker)
   // ------------------------------------------------------------------
-  const pickAndUpload = async (fieldId: string) => {
+  // Per-field upload state so one photo uploading doesn't spin every button
+  // on the screen (the old code reused the global `submitting` flag).
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
+  // Local preview shown the instant a photo is taken/picked, before the
+  // network call resolves — the nurse sees *something* immediately instead
+  // of a blank button while the upload is in flight.
+  const [localPreview, setLocalPreview] = useState<Record<string, string>>({});
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+
+  const openAppSettings = () => {
+    Linking.openSettings().catch(() =>
+      Alert.alert('Could not open Settings', 'Please open Settings manually to update permissions.'),
+    );
+  };
+
+  /** Returns true once permission is granted; otherwise alerts and returns false. */
+  const ensureCameraPermission = async (): Promise<boolean> => {
+    const current = await ImagePicker.getCameraPermissionsAsync();
+    if (current.granted) return true;
+    if (current.canAskAgain) {
+      const requested = await ImagePicker.requestCameraPermissionsAsync();
+      if (requested.granted) return true;
+    }
+    Alert.alert(
+      'Camera access needed',
+      'NurseConnect needs camera access to capture clinical photos. Please enable it in Settings.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Open Settings', onPress: openAppSettings },
+      ],
+    );
+    return false;
+  };
+
+  const ensureLibraryPermission = async (): Promise<boolean> => {
+    const current = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (current.granted || (current as any).accessPrivileges === 'limited') return true;
+    if (current.canAskAgain) {
+      const requested = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (requested.granted || (requested as any).accessPrivileges === 'limited') return true;
+    }
+    Alert.alert(
+      'Photo library access needed',
+      'NurseConnect needs photo library access to attach clinical photos. Please enable it in Settings.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Open Settings', onPress: openAppSettings },
+      ],
+    );
+    return false;
+  };
+
+  const uploadAsset = async (
+    fieldId: string,
+    kind: PhotoFieldKind,
+    asset: ImagePicker.ImagePickerAsset,
+  ) => {
+    setLocalPreview((s) => ({ ...s, [fieldId]: asset.uri }));
+    setUploadingField(fieldId);
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(
-          'Photo permission required',
-          'Please allow photo library access in Settings to attach clinical photos.',
-        );
-        return;
-      }
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.7,
-      });
-      if (res.canceled || !res.assets?.length) return;
-      const asset = res.assets[0];
-      setSubmitting(true);
       const up = await careWorkflowService.uploadDocumentationFile(
         bookingId,
         fieldId,
@@ -205,17 +254,80 @@ export default function ClinicalDocumentation() {
         asset.fileName || `${fieldId}.jpg`,
         asset.mimeType || 'image/jpeg',
       );
-      setDocFileUrls((s) => ({ ...s, [fieldId]: up.file_url }));
-      // Persist the doc field immediately so the row appears in completion status.
-      await careWorkflowService.submitDocumentationItem(bookingId, {
-        field_id: fieldId,
-        file_url: up.file_url,
-      });
+      if (kind === 'documentation') {
+        setDocFileUrls((s) => ({ ...s, [fieldId]: up.file_url }));
+        // Persist the doc field immediately so the row appears in completion status.
+        await careWorkflowService.submitDocumentationItem(bookingId, {
+          field_id: fieldId,
+          file_url: up.file_url,
+        });
+      } else {
+        // Checklist "photo" questions are answered like any other checklist
+        // question — the file_url rides inside the answer payload and is
+        // persisted together with the rest of the phase on "Next", not via
+        // the documentation endpoint.
+        setChecklist(fieldId, { file_url: up.file_url });
+      }
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.message || 'Please try again.');
+      const code = e?.detail?.detail?.code || e?.detail?.code;
+      if (code === 'CONSENT_MISSING') {
+        Alert.alert(
+          'Photo consent required',
+          'This patient has not given consent for clinical photographs yet. Please obtain consent before attaching photos.',
+        );
+      } else if (e?.network) {
+        Alert.alert('No connection', 'Could not upload the photo — please check your connection and try again.');
+      } else {
+        Alert.alert('Upload failed', e?.message || 'Please try again.');
+      }
+      // Drop the optimistic preview since the upload didn't actually land.
+      setLocalPreview((s) => {
+        const next = { ...s };
+        delete next[fieldId];
+        return next;
+      });
     } finally {
-      setSubmitting(false);
+      setUploadingField(null);
     }
+  };
+
+  const takePhoto = async (fieldId: string, kind: PhotoFieldKind) => {
+    const ok = await ensureCameraPermission();
+    if (!ok) return;
+    try {
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        allowsEditing: Platform.OS !== 'web',
+      });
+      if (res.canceled || !res.assets?.length) return;
+      await uploadAsset(fieldId, kind, res.assets[0]);
+    } catch (e: any) {
+      Alert.alert('Could not open camera', e?.message || 'Please try again.');
+    }
+  };
+
+  const pickFromLibrary = async (fieldId: string, kind: PhotoFieldKind) => {
+    const ok = await ensureLibraryPermission();
+    if (!ok) return;
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      await uploadAsset(fieldId, kind, res.assets[0]);
+    } catch (e: any) {
+      Alert.alert('Could not open photo library', e?.message || 'Please try again.');
+    }
+  };
+
+  const pickAndUpload = (fieldId: string, kind: PhotoFieldKind) => {
+    Alert.alert('Add clinical photo', 'Take a new photo or choose one from your gallery.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Choose from gallery', onPress: () => pickFromLibrary(fieldId, kind) },
+      { text: 'Take photo', onPress: () => takePhoto(fieldId, kind) },
+    ]);
   };
 
   // ------------------------------------------------------------------
@@ -438,7 +550,10 @@ export default function ClinicalDocumentation() {
                   question={q}
                   value={checklistAnswers[q.id]}
                   onChange={(v) => setChecklist(q.id, v)}
-                  onUploadPhoto={() => pickAndUpload(q.id)}
+                  onUploadPhoto={() => pickAndUpload(q.id, 'checklist')}
+                  uploading={uploadingField === q.id}
+                  previewUri={localPreview[q.id]}
+                  onViewPhoto={(url) => setViewerUrl(url)}
                 />
               ))
             )}
@@ -463,7 +578,10 @@ export default function ClinicalDocumentation() {
                 value={docAnswers[f.field_id]}
                 fileUrl={docFileUrls[f.field_id]}
                 onChange={(v) => setDocAnswer(f.field_id, v)}
-                onUploadPhoto={() => pickAndUpload(f.field_id)}
+                onUploadPhoto={() => pickAndUpload(f.field_id, 'documentation')}
+                uploading={uploadingField === f.field_id}
+                previewUri={localPreview[f.field_id]}
+                onViewPhoto={(url) => setViewerUrl(url)}
               />
             ))}
           </View>
@@ -504,6 +622,27 @@ export default function ClinicalDocumentation() {
           />
         </View>
       </SafeAreaView>
+
+      <Modal
+        visible={!!viewerUrl}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerUrl(null)}
+        testID="photo-viewer"
+      >
+        <TouchableOpacity
+          style={styles.viewerBackdrop}
+          activeOpacity={1}
+          onPress={() => setViewerUrl(null)}
+        >
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUrl(null)}>
+            <Ionicons name="close" size={26} color="#fff" />
+          </TouchableOpacity>
+          {viewerUrl ? (
+            <Image source={{ uri: viewerUrl }} style={styles.viewerImage} resizeMode="contain" />
+          ) : null}
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -609,11 +748,17 @@ function DynamicQuestion({
   value,
   onChange,
   onUploadPhoto,
+  uploading,
+  previewUri,
+  onViewPhoto,
 }: {
   question: WorkflowChecklistQuestion;
   value: any;
   onChange: (v: any) => void;
   onUploadPhoto: () => void;
+  uploading?: boolean;
+  previewUri?: string;
+  onViewPhoto?: (url: string) => void;
 }) {
   const required = !!question.required;
   return (
@@ -623,7 +768,17 @@ function DynamicQuestion({
         {required ? <Text style={styles.requiredMark}> *</Text> : null}
         <Text style={styles.qType}>  ({TYPE_LABEL[question.type] || question.type})</Text>
       </Text>
-      <FieldEditor type={question.type} options={question.options} value={value} onChange={onChange} onUploadPhoto={onUploadPhoto} testIdPrefix={`q-${question.id}`} />
+      <FieldEditor
+        type={question.type}
+        options={question.options}
+        value={value}
+        onChange={onChange}
+        onUploadPhoto={onUploadPhoto}
+        uploading={uploading}
+        previewUri={previewUri}
+        onViewPhoto={onViewPhoto}
+        testIdPrefix={`q-${question.id}`}
+      />
     </View>
   );
 }
@@ -634,12 +789,18 @@ function DynamicDocumentationField({
   fileUrl,
   onChange,
   onUploadPhoto,
+  uploading,
+  previewUri,
+  onViewPhoto,
 }: {
   field: WorkflowDocumentationField;
   value: any;
   fileUrl: string | null | undefined;
   onChange: (v: any) => void;
   onUploadPhoto: () => void;
+  uploading?: boolean;
+  previewUri?: string;
+  onViewPhoto?: (url: string) => void;
 }) {
   const required = !!field.required;
   return (
@@ -655,6 +816,9 @@ function DynamicDocumentationField({
         value={value}
         onChange={onChange}
         onUploadPhoto={onUploadPhoto}
+        uploading={uploading}
+        previewUri={previewUri}
+        onViewPhoto={onViewPhoto}
         existingFileUrl={fileUrl || undefined}
         testIdPrefix={`doc-${field.field_id}`}
       />
@@ -668,6 +832,9 @@ function FieldEditor({
   value,
   onChange,
   onUploadPhoto,
+  uploading,
+  previewUri,
+  onViewPhoto,
   existingFileUrl,
   testIdPrefix,
 }: {
@@ -676,6 +843,9 @@ function FieldEditor({
   value: any;
   onChange: (v: any) => void;
   onUploadPhoto: () => void;
+  uploading?: boolean;
+  previewUri?: string;
+  onViewPhoto?: (url: string) => void;
   existingFileUrl?: string;
   testIdPrefix: string;
 }) {
@@ -768,18 +938,45 @@ function FieldEditor({
         </View>
       );
     }
-    case 'photo':
+    case 'photo': {
+      const savedUrl = existingFileUrl || value?.file_url;
+      const thumbUri = previewUri || resolveMediaUrl(savedUrl);
       return (
         <View>
-          <TouchableOpacity style={styles.uploadBtn} onPress={onUploadPhoto} testID={`${testIdPrefix}-upload`}>
-            <Ionicons name="camera" size={20} color={Colors.primary} />
-            <Text style={styles.uploadTxt}>{existingFileUrl || value?.file_url ? 'Replace photo' : 'Upload photo'}</Text>
-          </TouchableOpacity>
-          {(existingFileUrl || value?.file_url) ? (
-            <Text style={styles.fileTxt}>{existingFileUrl || value?.file_url}</Text>
+          {thumbUri ? (
+            <TouchableOpacity
+              onPress={() => savedUrl && onViewPhoto?.(resolveMediaUrl(savedUrl) || thumbUri)}
+              disabled={!savedUrl}
+              testID={`${testIdPrefix}-thumb`}
+            >
+              <View style={styles.photoThumbWrap}>
+                <Image source={{ uri: thumbUri }} style={styles.photoThumb} />
+                {uploading ? (
+                  <View style={styles.photoThumbOverlay}>
+                    <ActivityIndicator color="#fff" />
+                  </View>
+                ) : null}
+              </View>
+            </TouchableOpacity>
           ) : null}
+          <TouchableOpacity
+            style={styles.uploadBtn}
+            onPress={onUploadPhoto}
+            disabled={uploading}
+            testID={`${testIdPrefix}-upload`}
+          >
+            {uploading ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Ionicons name="camera" size={20} color={Colors.primary} />
+            )}
+            <Text style={styles.uploadTxt}>
+              {uploading ? 'Uploading…' : savedUrl ? 'Replace photo' : 'Add photo'}
+            </Text>
+          </TouchableOpacity>
         </View>
       );
+    }
     case 'vitals_entry':
       return <VitalsEditor value={value || {}} onChange={onChange} testIdPrefix={testIdPrefix} />;
     case 'medication_entry':
@@ -1029,7 +1226,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   backTxt: { ...Typography.bodyBold, color: Colors.textPrimary },
+  photoThumbWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  photoThumb: { width: '100%', height: '100%' },
+  photoThumbOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerImage: { width: '100%', height: '80%' },
+  viewerClose: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 1,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
-
-// Unused import suppression (Image is reserved for future thumbnail preview)
-void Image;

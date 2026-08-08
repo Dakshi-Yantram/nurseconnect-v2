@@ -95,6 +95,13 @@ module.exports = () => ({
         // Required to raise the incoming-call screen over the lock screen.
         'android.permission.USE_FULL_SCREEN_INTENT',
         'android.permission.WAKE_LOCK',
+        // Clinical photo capture/upload (Assessment/Visit Details screen).
+        // Without CAMERA declared here, requestCameraPermissionsAsync()
+        // resolves granted=false unconditionally and the camera can never
+        // open, even if the user taps "Allow" — the OS never shows a
+        // prompt because the app never declared the permission.
+        'android.permission.CAMERA',
+        'android.permission.READ_MEDIA_IMAGES',
       ],
     },
 
@@ -116,6 +123,21 @@ module.exports = () => ({
         },
       ],
       'expo-font',
+      // expo-image-picker's config plugin is what actually injects the
+      // camera/photo-library permission entries (and their usage-description
+      // strings) into the native Android/iOS projects at prebuild time. It
+      // was missing entirely before, which is the root cause of the camera
+      // never opening on device builds — the permission simply didn't exist
+      // natively for the OS to grant, regardless of what the JS side asked.
+      [
+        'expo-image-picker',
+        {
+          photosPermission:
+            'NurseConnect needs photo library access so you can attach clinical photos during a visit.',
+          cameraPermission:
+            'NurseConnect uses the camera to capture clinical documentation during a visit.',
+        },
+      ],
       // Only when credentials are present — see the note at the top.
       ...(firebaseReady ? ['@react-native-firebase/app'] : []),
       // CallKit (iOS) + ConnectionService (Android). No credentials needed.
