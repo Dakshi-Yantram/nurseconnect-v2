@@ -1,0 +1,23 @@
+name: nurseconnect_backend
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nurseconnect
+      POSTGRES_PASSWORD: nurseconnect
+      POSTGRES_DB: nurseconnect
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+
+volumes:
+  pgdata:
