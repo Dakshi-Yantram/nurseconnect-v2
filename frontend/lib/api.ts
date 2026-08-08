@@ -12,6 +12,21 @@ import { authStorage } from './auth-storage';
 const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 export const API_BASE = BASE_URL ? `${BASE_URL}/api` : '/api';
 
+/**
+ * Upload endpoints (e.g. clinical photo documentation) return a *relative*
+ * `/api/uploads/...` path so the backend never has to know its own public
+ * host. Screens rendering that path as an <Image> need the full origin —
+ * without it RN resolves the string as a bare relative URL and the image
+ * simply never loads (no error, just a blank box), which historically read
+ * as "upload succeeded but I can't see my photo".
+ */
+export function resolveMediaUrl(pathOrUrl?: string | null): string | undefined {
+  if (!pathOrUrl) return undefined;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  if (!BASE_URL) return pathOrUrl; // web dev server: relative path resolves fine
+  return `${BASE_URL}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
+}
+
 if (!BASE_URL && __DEV__) {
   // A relative "/api" only resolves when the app is served from the same
   // origin as the backend (i.e. `expo start --web`). On a device or simulator
