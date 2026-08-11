@@ -23,6 +23,8 @@ import { Header } from '../../components/Header';
 import { OfflineBanner } from '../../components/OfflineBanner';
 import { BookingStatusBadge } from '../../components/BookingStatusBadge';
 import { VisitOtpChip } from '../../components/VisitOtpChip';
+import { CompletionOtpChip } from '../../components/CompletionOtpChip';
+import { PatientSafetyVerification } from '../../components/PatientSafetyVerification';
 import { GradientButton } from '../../components/GradientButton';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
@@ -210,6 +212,16 @@ export default function BookingDetail() {
           )}
 
           <VisitOtpChip bookingId={booking.id} status={booking.rawStatus} />
+
+          {/* Composite Care Package (bundled kit) — Workflow 1, Step 4 & 6 */}
+          <PatientSafetyVerification
+            bookingId={booking.id}
+            status={booking.rawStatus}
+            materialIncluded={booking.materialIncluded}
+          />
+          {booking.materialIncluded && booking.rawStatus === 'in_progress' && (
+            <CompletionOtpChip bookingId={booking.id} />
+          )}
 
           <View style={styles.divider} />
 
