@@ -17,6 +17,8 @@ export interface CarePackageOut {
   per_visit_price: string;
   subsidy_eligible: boolean;
   is_active: boolean;
+  /** Composite Care Package — bundles a procedural kit with the visit. */
+  material_included: boolean;
 }
 
 export const catalogService = {

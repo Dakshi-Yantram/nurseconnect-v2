@@ -108,6 +108,14 @@ export default function NurseVisitScreen() {
       if (record.status === 'completed') {
         setPhase('completed');
       } else if (record.check_in_at) {
+        // Composite Care Package bookings have their own post-OTP flow
+        // (synchronized safety checklist -> mandatory photos -> a second,
+        // completion OTP) — hand off to that screen instead of the generic
+        // quick-action panel below, which doesn't know about any of that.
+        if (booking?.materialIncluded) {
+          router.replace({ pathname: '/composite-visit/[id]', params: { id: bookingId! } });
+          return;
+        }
         setPhase('active');
       } else {
         setPhase('otp');
@@ -121,7 +129,7 @@ export default function NurseVisitScreen() {
         setPhase('otp'); // still allow OTP entry
       }
     }
-  }, [bookingId]);
+  }, [bookingId, booking?.materialIncluded, router]);
 
   useEffect(() => {
     loadVisit();
@@ -157,10 +165,14 @@ export default function NurseVisitScreen() {
         longitude,
       });
       setVisit(record);
-      setPhase('active');
       // Refresh the assignment list so the dashboard and Visits tab reflect
       // the in-progress state rather than still showing "assigned".
       useStore.getState().refreshAssignmentsAPI().catch(() => {});
+      if (booking?.materialIncluded) {
+        router.replace({ pathname: '/composite-visit/[id]', params: { id: bookingId! } });
+        return;
+      }
+      setPhase('active');
     } catch (e: any) {
       const code = e?.detail?.code || e?.code;
       if (code === 'OTP_INVALID') {

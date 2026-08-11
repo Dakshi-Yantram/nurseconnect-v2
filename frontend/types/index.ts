@@ -85,7 +85,11 @@ export type BookingStatus =
   | 'cancelled'
   | 'missed'
   | 'rematch_pending'
-  | 'disputed';
+  | 'disputed'
+  // Composite Care Package (material_included) states — Workflow 1.
+  | 'prescription_pending'
+  | 'searching_nurse'
+  | 'quality_discrepancy_alert';
 
 export type PaymentStatus =
   | 'pending'
@@ -131,6 +135,8 @@ export interface Booking {
   distanceKm?: number;
   latitude?: number;
   longitude?: number;
+  /** Composite Care Package (bundled procedural kit) — Workflow 1. */
+  materialIncluded?: boolean;
 }
 
 export interface VisitTimelineStep {

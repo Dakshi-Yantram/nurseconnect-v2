@@ -18,13 +18,15 @@ const UPCOMING: BookingStatus[] = [
   'worker_en_route',
   'worker_arrived',
   'rematch_pending',
+  'prescription_pending',
+  'searching_nurse',
 ];
 
 const IN_CARE: BookingStatus[] = ['in_progress'];
 
 const CLOSED: BookingStatus[] = ['completed', 'cancelled', 'missed'];
 
-const NEEDS_REVIEW: BookingStatus[] = ['disputed'];
+const NEEDS_REVIEW: BookingStatus[] = ['disputed', 'quality_discrepancy_alert'];
 
 export interface BookingBuckets {
   all: Booking[];
@@ -123,6 +125,9 @@ export const BOOKING_STATUS_LABEL: Record<BookingStatus, string> = {
   missed: 'Missed',
   rematch_pending: 'Finding a new nurse',
   disputed: 'Needs review',
+  prescription_pending: 'Prescription under review',
+  searching_nurse: 'Finding a nurse',
+  quality_discrepancy_alert: 'Flagged for supervisor review',
 };
 
 /** Badge palette key for a backend status. */
@@ -138,6 +143,7 @@ export function badgeToneFor(status: BookingStatus): 'scheduled' | 'enroute' | '
     case 'cancelled':
     case 'missed':
     case 'disputed':
+    case 'quality_discrepancy_alert':
       return 'cancelled';
     default:
       return 'scheduled';
