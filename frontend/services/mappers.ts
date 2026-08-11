@@ -82,6 +82,8 @@ export interface BackendBooking {
   patient_name?: string | null;
   service_name?: string | null;
   worker_name?: string | null;
+  /** Composite Care Package (bundled procedural kit) — Workflow 1. */
+  material_included?: boolean;
 }
 
 export interface BackendNotification {
@@ -182,6 +184,7 @@ export function mapBooking(
     distanceKm: typeof b.distance_km === 'number' ? b.distance_km : undefined,
     latitude: b.latitude !== null && b.latitude !== undefined ? toNum(b.latitude) : undefined,
     longitude: b.longitude !== null && b.longitude !== undefined ? toNum(b.longitude) : undefined,
+    materialIncluded: !!b.material_included,
   };
 }
 
