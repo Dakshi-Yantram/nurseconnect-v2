@@ -5,6 +5,8 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme
 import {
   SAFETY_CHECKLIST_ITEMS,
   SafetyChecklistAnswers,
+  SafetyChecklistItem,
+  SafetyChecklistKey,
 } from '../services/composite-care.service';
 
 interface Props {
@@ -13,10 +15,15 @@ interface Props {
   /** Current yes/no answers — undefined items render unanswered. */
   values: Partial<SafetyChecklistAnswers>;
   /** Omit (or set readOnly) to render a static, non-interactive summary. */
-  onChange?: (key: keyof SafetyChecklistAnswers, value: boolean) => void;
+  onChange?: (key: SafetyChecklistKey, value: boolean) => void;
   readOnly?: boolean;
   /** Highlights items that mismatch a counterpart's answers (anti-cheat). */
   mismatchedKeys?: string[];
+  /**
+   * The five items to render. Defaults to Workflow 1's questionnaire;
+   * Workflow 2 (service-only) passes its supply-inspection items instead.
+   */
+  items?: SafetyChecklistItem[];
 }
 
 export const SafetyChecklistCard: React.FC<Props> = ({
@@ -26,6 +33,7 @@ export const SafetyChecklistCard: React.FC<Props> = ({
   onChange,
   readOnly,
   mismatchedKeys,
+  items = SAFETY_CHECKLIST_ITEMS,
 }) => {
   return (
     <View style={styles.card} testID="safety-checklist-card">
@@ -33,7 +41,7 @@ export const SafetyChecklistCard: React.FC<Props> = ({
       {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
 
       <View style={{ marginTop: Spacing.md }}>
-        {SAFETY_CHECKLIST_ITEMS.map((item) => {
+        {items.map((item) => {
           const answer = values[item.key];
           const mismatched = mismatchedKeys?.includes(item.key);
           return (

@@ -19,6 +19,10 @@ export interface CarePackageOut {
   is_active: boolean;
   /** Composite Care Package — bundles a procedural kit with the visit. */
   material_included: boolean;
+  /** Procedure package needing a doctor's Rx. With material_included=false
+   *  this is a Service-Only (Workflow 2) package: the patient brings their
+   *  own supplies and must pass the supply guardrail before paying. */
+  requires_prescription: boolean;
 }
 
 export const catalogService = {

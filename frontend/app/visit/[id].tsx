@@ -213,13 +213,10 @@ export default function BookingDetail() {
 
           <VisitOtpChip bookingId={booking.id} status={booking.rawStatus} />
 
-          {/* Composite Care Package (bundled kit) — Workflow 1, Step 4 & 6 */}
-          <PatientSafetyVerification
-            bookingId={booking.id}
-            status={booking.rawStatus}
-            materialIncluded={booking.materialIncluded}
-          />
-          {booking.materialIncluded && booking.rawStatus === 'in_progress' && (
+          {/* Guarded workflows (bundled kit, or patient's own supplies) —
+              Step 4 & 6. Both render nothing when they don't apply. */}
+          <PatientSafetyVerification bookingId={booking.id} status={booking.rawStatus} />
+          {booking.guardedWorkflow && booking.rawStatus === 'in_progress' && (
             <CompletionOtpChip bookingId={booking.id} />
           )}
 

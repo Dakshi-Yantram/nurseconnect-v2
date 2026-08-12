@@ -13,15 +13,30 @@ interface Props {
   submitted?: boolean;
   disabled?: boolean;
   testID?: string;
+  /**
+   * Offer the photo library alongside the camera. Off by default: the nurse's
+   * Step 5 & 6 proofs must be in-the-moment. The patient's booking-time
+   * supply photo explicitly permits "Live or Gallery", so that caller opts in.
+   */
+  allowGallery?: boolean;
 }
 
 /**
- * Mandatory live-camera capture (never gallery — Steps 5 & 6 require an
- * in-the-moment photo, not a pre-existing one) that hands back base64 so the
- * caller can POST it straight to the backend, which uploads to Cloudinary
- * and overlays timestamp/GPS/Order_ID metadata server-side.
+ * Mandatory photo capture that hands back base64 so the caller can POST it
+ * straight to the backend, which uploads to Cloudinary and overlays
+ * timestamp/GPS/Order_ID metadata server-side.
+ *
+ * Camera-only unless `allowGallery` is set — see that prop.
  */
-export const PhotoCapture: React.FC<Props> = ({ title, hint, onCaptured, submitted, disabled, testID }) => {
+export const PhotoCapture: React.FC<Props> = ({
+  title,
+  hint,
+  onCaptured,
+  submitted,
+  disabled,
+  testID,
+  allowGallery,
+}) => {
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -49,31 +64,50 @@ export const PhotoCapture: React.FC<Props> = ({ title, hint, onCaptured, submitt
     return false;
   };
 
-  const capture = async () => {
-    if (disabled || busy) return;
-    const ok = await ensureCameraPermission();
-    if (!ok) return;
+  const pick = async (source: 'camera' | 'gallery') => {
     setBusy(true);
     try {
-      const res = await ImagePicker.launchCameraAsync({
+      const options = {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.6,
         base64: true,
         allowsEditing: Platform.OS !== 'web',
-      });
+      } as const;
+      const res =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync(options)
+          : await ImagePicker.launchImageLibraryAsync(options);
       if (res.canceled || !res.assets?.length) return;
       const asset = res.assets[0];
       if (!asset.base64) {
-        Alert.alert('Could not read photo', 'Please try taking the photo again.');
+        Alert.alert('Could not read photo', 'Please try again.');
         return;
       }
       setPreviewUri(asset.uri);
       onCaptured(asset.base64, asset.uri);
     } catch (e: any) {
-      Alert.alert('Could not open camera', e?.message || 'Please try again.');
+      Alert.alert(
+        source === 'camera' ? 'Could not open camera' : 'Could not open photo library',
+        e?.message || 'Please try again.',
+      );
     } finally {
       setBusy(false);
     }
+  };
+
+  const capture = async () => {
+    if (disabled || busy) return;
+    if (allowGallery) {
+      Alert.alert('Add photo', 'Take a new photo or choose one from your library.', [
+        { text: 'Take photo', onPress: async () => (await ensureCameraPermission()) && pick('camera') },
+        { text: 'Choose from library', onPress: () => pick('gallery') },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+      return;
+    }
+    const ok = await ensureCameraPermission();
+    if (!ok) return;
+    await pick('camera');
   };
 
   return (

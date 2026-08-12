@@ -84,6 +84,9 @@ export interface BackendBooking {
   worker_name?: string | null;
   /** Composite Care Package (bundled procedural kit) — Workflow 1. */
   material_included?: boolean;
+  /** Set when the booking passed the Workflow 2 supply guardrail. */
+  patient_supply_confirmation?: Record<string, boolean> | null;
+  patient_supply_photo_url?: string | null;
 }
 
 export interface BackendNotification {
@@ -185,6 +188,10 @@ export function mapBooking(
     latitude: b.latitude !== null && b.latitude !== undefined ? toNum(b.latitude) : undefined,
     longitude: b.longitude !== null && b.longitude !== undefined ? toNum(b.longitude) : undefined,
     materialIncluded: !!b.material_included,
+    serviceOnlyWorkflow: !!b.patient_supply_confirmation,
+    // Either guarded workflow — what the safety-checklist and completion-OTP
+    // surfaces key off, since both run those steps.
+    guardedWorkflow: !!b.material_included || !!b.patient_supply_confirmation,
   };
 }
 
