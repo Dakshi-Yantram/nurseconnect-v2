@@ -54,17 +54,55 @@ export interface NCRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
 }
 
+/**
+ * FastAPI validation errors come back as `{ detail: [{ loc, msg, type }, ...] }`
+ * — an array, not a string. Turn that into a readable "field: message" line
+ * instead of silently discarding it.
+ */
+function stringifyValidationErrors(list: any[]): string | null {
+  try {
+    const parts = list
+      .map((item) => {
+        const field = Array.isArray(item?.loc) ? item.loc.filter((p: any) => p !== 'body').join('.') : null;
+        const msg = typeof item?.msg === 'string' ? item.msg : null;
+        if (field && msg) return `${field}: ${msg}`;
+        return msg || null;
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join('; ') : null;
+  } catch {
+    return null;
+  }
+}
+
 function normaliseError(err: unknown): APIError {
   const e = err as AxiosError<any>;
   if (e.response) {
     const rawDetail = e.response.data?.detail ?? e.response.data?.message ?? e.response.statusText;
-    const detail =
-      rawDetail && typeof rawDetail === 'object' && 'message' in rawDetail
-        ? (rawDetail as any).message
-        : rawDetail;
+    let message: string | null = null;
+
+    if (typeof rawDetail === 'string') {
+      message = rawDetail;
+    } else if (Array.isArray(rawDetail)) {
+      // e.g. FastAPI 422 validation errors — surface the real field/reason
+      // instead of collapsing to a generic message.
+      message = stringifyValidationErrors(rawDetail);
+    } else if (rawDetail && typeof rawDetail === 'object' && 'message' in rawDetail) {
+      message = (rawDetail as any).message;
+    } else if (rawDetail && typeof rawDetail === 'object') {
+      // Unknown object shape — still better than hiding it entirely.
+      try {
+        message = JSON.stringify(rawDetail);
+      } catch {
+        message = null;
+      }
+    }
+
     return {
       status: e.response.status,
-      message: typeof detail === 'string' ? detail : 'Request failed',
+      // Always keep the HTTP status visible so "Request failed" (if it ever
+      // shows) can at least be traced back to a status code in a screenshot.
+      message: message || `Request failed (${e.response.status})`,
       detail: e.response.data,
     };
   }
