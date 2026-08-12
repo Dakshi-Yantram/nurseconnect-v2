@@ -22,6 +22,11 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { GradientButton } from '../components/GradientButton';
+import {
+  PrescriptionSupplyGate,
+  PrescriptionSupplyResult,
+} from '../components/PrescriptionSupplyGate';
+import { compositeCareService } from '../services/composite-care.service';
 import { InputField } from '../components/InputField';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
@@ -70,6 +75,7 @@ export default function BookingScreen() {
   const [notes, setNotes] = useState('');
   const [isUrgent, setIsUrgent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -103,25 +109,90 @@ export default function BookingScreen() {
   const selectedAddress = addresses.find((a) => a.id === effectiveAddressId) ?? null;
   const selectedPatient = patients.find((p) => p.id === effectivePatientId) ?? null;
 
-  const submit = async () => {
+  // Which of the three booking flows this package takes.
+  //   Workflow 1 — bundled procedural kit
+  //   Workflow 2 — patient brings their own supplies (needs the guardrail)
+  //   otherwise  — ordinary booking, no prescription gate
+  const isComposite = !!pkg?.material_included;
+  const isServiceOnly = !!pkg?.requires_prescription && !pkg?.material_included;
+  const needsPrescriptionGate = isComposite || isServiceOnly;
+
+  /** Shared guard for the three preconditions every flow needs. */
+  const validate = (): boolean => {
     if (!pkg) {
       Alert.alert('Choose a care package', 'Go back and pick the care you need.');
-      return;
+      return false;
     }
     if (!effectivePatientId) {
       Alert.alert('Add a patient', 'Tell us who this visit is for before booking.', [
         { text: 'Not now', style: 'cancel' },
         { text: 'Add patient', onPress: () => router.push('/patients') },
       ]);
-      return;
+      return false;
     }
     if (!effectiveAddressId) {
       Alert.alert('Add an address', 'We need a service address to dispatch a nurse.', [
         { text: 'Not now', style: 'cancel' },
         { text: 'Add address', onPress: () => router.push('/addresses') },
       ]);
+      return false;
+    }
+    return true;
+  };
+
+  const startBooking = () => {
+    if (!validate()) return;
+    if (needsPrescriptionGate) {
+      setGateOpen(true);
       return;
     }
+    submit();
+  };
+
+  /**
+   * Workflows 1 & 2 — create the booking through the guarded endpoints, which
+   * attach the prescription (and, for Workflow 2, the supply guardrail) and
+   * park the booking in `prescription_pending` for pharmacist review.
+   */
+  const submitGuarded = async (result: PrescriptionSupplyResult) => {
+    if (!pkg || !effectivePatientId || !selectedAddress) return;
+    setSubmitting(true);
+    try {
+      const common = {
+        package_id: pkg.id,
+        patient_id: effectivePatientId,
+        scheduled_date: days[dayIdx].ymd,
+        scheduled_start_time: to24HourTime(slot),
+        address_snapshot: selectedAddress as unknown as Record<string, any>,
+        latitude: selectedAddress.latitude ?? 0,
+        longitude: selectedAddress.longitude ?? 0,
+        special_instructions: notes.trim() || undefined,
+        prescription_base64: result.prescriptionBase64,
+      };
+      const created = result.supplyConfirmation
+        ? await compositeCareService.createServiceOnlyBooking({
+            ...common,
+            supply_confirmation: result.supplyConfirmation,
+            supply_photo_base64: result.supplyPhotoBase64,
+          })
+        : await compositeCareService.createBooking(common);
+      setGateOpen(false);
+      router.replace({ pathname: '/payment', params: { bookingId: created.id } });
+    } catch (e: any) {
+      const detail = e?.detail?.detail ?? e?.detail;
+      Alert.alert(
+        'Could not create booking',
+        (typeof detail === 'string' ? detail : detail?.message) ||
+          e?.message ||
+          'Please try again.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!validate() || !pkg || !effectivePatientId || !effectiveAddressId) return;
 
     setSubmitting(true);
     try {
@@ -337,12 +408,20 @@ export default function BookingScreen() {
 
       <SafeAreaView style={styles.stickyBar} edges={['bottom']}>
         <GradientButton
-          title="Continue to payment"
-          onPress={submit}
+          title={needsPrescriptionGate ? 'Continue' : 'Continue to payment'}
+          onPress={startBooking}
           loading={submitting}
           testID="proceed-payment-btn"
         />
       </SafeAreaView>
+
+      <PrescriptionSupplyGate
+        visible={gateOpen}
+        serviceOnly={isServiceOnly}
+        submitting={submitting}
+        onCancel={() => setGateOpen(false)}
+        onComplete={submitGuarded}
+      />
     </SafeAreaView>
   );
 }

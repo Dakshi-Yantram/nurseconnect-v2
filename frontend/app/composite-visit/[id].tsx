@@ -41,9 +41,12 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/th
 import { useStore } from '../../store';
 import { visitsService } from '../../services/visits.service';
 import {
+  checklistItemsFor,
   compositeCareService,
   SafetyChecklistAnswers,
   SafetyChecklistStatusOut,
+  SUPPLY_ISSUE_OPTIONS,
+  SupplyIssueType,
 } from '../../services/composite-care.service';
 
 type Step =
@@ -197,7 +200,11 @@ export default function CompositeVisitScreen() {
   }, [step, bookingId]);
 
   // ── Step 4: nurse submits checklist ─────────────────────────────────────
-  const allAnswered = Object.keys(nurseAnswers).length === 5;
+  // Which five questions apply depends on the workflow. Until the status has
+  // loaded we assume Workflow 1, matching the screen's original behaviour.
+  const isServiceOnly = checklistStatus ? !checklistStatus.material_included : false;
+  const checklistItems = checklistItemsFor(!isServiceOnly);
+  const allAnswered = checklistItems.every((i) => nurseAnswers[i.key] !== undefined);
 
   const submitChecklist = async () => {
     if (!bookingId || !allAnswered) return;
@@ -212,6 +219,42 @@ export default function CompositeVisitScreen() {
       Alert.alert('Could not submit checklist', e?.message || 'Please try again.');
     } finally {
       setSubmittingChecklist(false);
+    }
+  };
+
+  /**
+   * Workflow 2 — the nurse found a problem with the patient's own supplies
+   * (broken sterile packaging, expired medicine). Reporting blocks the
+   * procedure server-side and raises an ops escalation, so this confirms
+   * before sending rather than firing on a stray tap.
+   */
+  const promptSupplyIssue = () => {
+    Alert.alert(
+      'Report supply issue',
+      "What's wrong with the patient's supplies? This puts the procedure on hold and alerts our team.",
+      [
+        ...SUPPLY_ISSUE_OPTIONS.map((opt) => ({
+          text: opt.label,
+          onPress: () => sendSupplyIssue(opt.value),
+        })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ],
+    );
+  };
+
+  const sendSupplyIssue = async (issueType: SupplyIssueType) => {
+    if (!bookingId) return;
+    try {
+      const status = await compositeCareService.reportSupplyIssue(bookingId, {
+        issue_type: issueType,
+      });
+      setChecklistStatus(status);
+      Alert.alert(
+        'Reported',
+        'The procedure is on hold and our team has been alerted. Please wait for a supervisor to call.',
+      );
+    } catch (e: any) {
+      Alert.alert('Could not report the issue', e?.message || 'Please try again.');
     }
   };
 
@@ -363,7 +406,7 @@ export default function CompositeVisitScreen() {
           <Ionicons name="warning" size={56} color={Colors.error} />
           <Text style={styles.discTitle}>Quality discrepancy flagged</Text>
           <Text style={styles.discBody}>
-            The patient/family's safety-check answers didn't match yours. This booking has been
+            The patient/family&apos;s safety-check answers didn&apos;t match yours. This booking has been
             sent to Ops for a supervisor review call — please pause the procedure and wait to be
             contacted before proceeding.
           </Text>
@@ -424,12 +467,28 @@ export default function CompositeVisitScreen() {
           )}
 
           <SafetyChecklistCard
-            title="Pre-procedure clinical & intake questionnaire"
+            title={
+              isServiceOnly
+                ? 'Pre-procedure & patient supply inspection'
+                : 'Pre-procedure clinical & intake questionnaire'
+            }
             subtitle="Complete every item honestly — the patient/family answers the same five questions independently on their app, and mismatches are flagged for supervisor review."
             values={nurseAnswers}
+            items={checklistItems}
             onChange={(key, value) => setNurseAnswers((s) => ({ ...s, [key]: value }))}
             readOnly={step === 'waiting_patient'}
           />
+
+          {isServiceOnly && step === 'checklist' && (
+            <TouchableOpacity
+              style={styles.supplyIssueBtn}
+              onPress={promptSupplyIssue}
+              testID="report-supply-issue"
+            >
+              <Ionicons name="alert-circle-outline" size={18} color={Colors.error} />
+              <Text style={styles.supplyIssueTxt}>Report supply issue</Text>
+            </TouchableOpacity>
+          )}
 
           {step === 'checklist' ? (
             <GradientButton
@@ -461,7 +520,7 @@ export default function CompositeVisitScreen() {
           <Text style={styles.stepTitle}>Both checklists match ✓</Text>
           <Text style={styles.stepSub}>
             Take one live photo showing the sealed, unopened procedure kit together with the
-            doctor's prescription. This unlocks the procedure.
+            doctor&apos;s prescription. This unlocks the procedure.
           </Text>
           <View style={{ marginTop: Spacing.lg }}>
             <PhotoCapture
@@ -597,6 +656,18 @@ const styles = StyleSheet.create({
 
   waitingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: Spacing.lg, justifyContent: 'center' },
   waitingTxt: { ...Typography.small, color: Colors.textSecondary },
+  supplyIssueBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.error,
+  },
+  supplyIssueTxt: { ...Typography.small, color: Colors.error, fontWeight: '600' as const },
 
   stepTitle: { ...Typography.h3, color: Colors.textPrimary },
   stepSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 6, lineHeight: 19 },

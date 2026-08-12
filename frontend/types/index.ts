@@ -137,6 +137,10 @@ export interface Booking {
   longitude?: number;
   /** Composite Care Package (bundled procedural kit) — Workflow 1. */
   materialIncluded?: boolean;
+  /** Service-Only, patient supplies their own materials — Workflow 2. */
+  serviceOnlyWorkflow?: boolean;
+  /** Either guarded workflow — both run the synchronized safety checklist. */
+  guardedWorkflow?: boolean;
 }
 
 export interface VisitTimelineStep {

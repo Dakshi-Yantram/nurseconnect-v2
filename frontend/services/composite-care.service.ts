@@ -1,10 +1,16 @@
 /**
- * Composite Care Package (Workflow 1) — service layer.
+ * Guarded visit workflows — service layer.
+ *
+ * Workflow 1 — Composite Care Package (`material_included`): the platform
+ * supplies the procedural kit.
+ * Workflow 2 — Service-Only: the patient supplies their own materials, so
+ * booking carries a supply guardrail and the nurse additionally inspects and
+ * expiry-checks those supplies on arrival.
  *
  * Mirrors `visits.service.ts`'s conventions and talks to the
- * `/composite-care/...` router added on the backend. Covers Steps 1 and
- * 4–7 of the spec (Step 2/3 — pharmacist approval and dispatch — are admin
- * / existing-flow concerns, not this app).
+ * `/composite-care/...` router. Covers Steps 1 and 4–7 of the spec (Step 2/3
+ * — pharmacist approval and dispatch — are admin / existing-flow concerns,
+ * not this app).
  */
 import { api } from '../lib/api';
 
@@ -12,21 +18,33 @@ import { api } from '../lib/api';
    Step 4 — synchronized safety checklist
    ============================================================ */
 
-/** The five yes/no items both the nurse and the patient answer. */
+/**
+ * The union of both workflows' yes/no items. Each workflow asks exactly five;
+ * `hand_hygiene` and `sterile_gloves` are common to both. The backend
+ * validates that the five belonging to *this booking's* workflow are all
+ * answered, so the rest are optional here.
+ */
 export interface SafetyChecklistAnswers {
   hand_hygiene: boolean;
   sterile_gloves: boolean;
-  identity_and_wellbeing_check: boolean;
-  allergy_and_complaint_history: boolean;
-  prescription_and_expiry_check: boolean;
+  // Workflow 1 only.
+  identity_and_wellbeing_check?: boolean;
+  allergy_and_complaint_history?: boolean;
+  prescription_and_expiry_check?: boolean;
+  // Workflow 2 only.
+  health_condition_check?: boolean;
+  supply_packaging_intact?: boolean;
+  supply_expiry_check?: boolean;
 }
 
+export type SafetyChecklistKey = keyof SafetyChecklistAnswers;
+
 export interface SafetyChecklistItem {
-  key: keyof SafetyChecklistAnswers;
+  key: SafetyChecklistKey;
   label: string;
 }
 
-/** Shared copy so the nurse and patient cards render identical wording. */
+/** Workflow 1 — Pre-Procedure Clinical & Intake Questionnaire. */
 export const SAFETY_CHECKLIST_ITEMS: SafetyChecklistItem[] = [
   { key: 'hand_hygiene', label: 'Sanitized hands in front of patient/family' },
   { key: 'sterile_gloves', label: 'Donned fresh, sterile gloves' },
@@ -34,6 +52,20 @@ export const SAFETY_CHECKLIST_ITEMS: SafetyChecklistItem[] = [
   { key: 'allergy_and_complaint_history', label: 'Assessed allergy history & current chief complaints' },
   { key: 'prescription_and_expiry_check', label: "Verified doctor's prescription & drug expiry date" },
 ];
+
+/** Workflow 2 — Pre-Procedure & Patient Supply Inspection. */
+export const SERVICE_ONLY_CHECKLIST_ITEMS: SafetyChecklistItem[] = [
+  { key: 'hand_hygiene', label: 'Sanitized hands in front of patient' },
+  { key: 'sterile_gloves', label: 'Wore fresh, sterile gloves' },
+  { key: 'health_condition_check', label: "Asked about patient's current health condition & chief complaints" },
+  { key: 'supply_packaging_intact', label: 'Inspected patient supplies: sterile packaging is unbroken' },
+  { key: 'supply_expiry_check', label: "Expiry check: patient's supplies/medicine are not expired" },
+];
+
+/** Pick the five items this booking's workflow asks. */
+export function checklistItemsFor(materialIncluded: boolean): SafetyChecklistItem[] {
+  return materialIncluded ? SAFETY_CHECKLIST_ITEMS : SERVICE_ONLY_CHECKLIST_ITEMS;
+}
 
 export interface NurseSafetyChecklistSubmit extends SafetyChecklistAnswers {
   notes?: string;
@@ -46,7 +78,32 @@ export interface SafetyChecklistStatusOut {
   patient_submitted_at: string | null;
   quality_discrepancy: boolean;
   both_submitted: boolean;
+  /** Which workflow this booking runs — drives which five items to render. */
+  material_included: boolean;
+  checklist_items: string[];
+  supply_issue_reported: boolean;
 }
+
+/** Workflow 2 — nurse found a problem with the patient's own supplies. */
+export type SupplyIssueType =
+  | 'packaging_broken'
+  | 'expired'
+  | 'missing'
+  | 'wrong_item'
+  | 'other';
+
+export interface SupplyIssueReport {
+  issue_type: SupplyIssueType;
+  notes?: string;
+}
+
+export const SUPPLY_ISSUE_OPTIONS: { value: SupplyIssueType; label: string }[] = [
+  { value: 'packaging_broken', label: 'Sterile packaging is broken' },
+  { value: 'expired', label: 'Supplies / medicine are expired' },
+  { value: 'missing', label: 'Required supplies are missing' },
+  { value: 'wrong_item', label: 'Wrong item for this procedure' },
+  { value: 'other', label: 'Other issue' },
+];
 
 /** Shape of the 409 the backend raises when nurse/patient answers mismatch. */
 export interface QualityDiscrepancyDetail {
@@ -130,9 +187,40 @@ export interface CompositeBookingCreate {
   prescription_cloudinary_public_id?: string;
 }
 
+/**
+ * Workflow 2 Step 1 — the supply guardrail. Every item must be ticked and a
+ * supply photo attached, or the backend refuses to create the booking (so no
+ * payable booking exists until the guardrail passes).
+ */
+export interface SupplyConfirmation {
+  medicine: boolean;
+  cannula_or_catheter: boolean;
+  drip_set: boolean;
+  prescription: boolean;
+}
+
+export const SUPPLY_CONFIRMATION_ITEMS: { key: keyof SupplyConfirmation; label: string }[] = [
+  { key: 'medicine', label: 'I have the prescribed medicine ready' },
+  { key: 'cannula_or_catheter', label: 'I have the cannula / catheter ready' },
+  { key: 'drip_set', label: 'I have the drip set ready' },
+  { key: 'prescription', label: "I have the doctor's prescription ready" },
+];
+
+export interface ServiceOnlyBookingCreate
+  extends Omit<CompositeBookingCreate, never> {
+  supply_confirmation: SupplyConfirmation;
+  /** Photo of the supplies laid out next to the prescription. */
+  supply_photo_base64?: string;
+  supply_photo_url?: string;
+}
+
 export const compositeCareService = {
   createBooking: (payload: CompositeBookingCreate) =>
     api.post<any>(`/composite-care/bookings`, payload),
+
+  /** Workflow 2 — books a Service-Only package with the supply guardrail. */
+  createServiceOnlyBooking: (payload: ServiceOnlyBookingCreate) =>
+    api.post<any>(`/composite-care/bookings/service-only`, payload),
 
   // ---- Step 4: synchronized safety checklist -----------------------------
   submitNurseChecklist: (bookingId: string, payload: NurseSafetyChecklistSubmit) =>
@@ -147,6 +235,14 @@ export const compositeCareService = {
     ),
   getChecklistStatus: (bookingId: string) =>
     api.get<SafetyChecklistStatusOut>(`/composite-care/bookings/${bookingId}/safety-checklist-status`),
+
+  /** Workflow 2 — nurse reports a problem with the patient's own supplies.
+   *  Blocks the procedure and raises an ops escalation. */
+  reportSupplyIssue: (bookingId: string, payload: SupplyIssueReport) =>
+    api.post<SafetyChecklistStatusOut>(
+      `/composite-care/bookings/${bookingId}/report-supply-issue`,
+      payload,
+    ),
 
   // ---- Step 5: pre-procedure photo (unlocks IN_PROGRESS) -----------------
   submitPreProcedurePhoto: (bookingId: string, payload: PhotoSubmit) =>
