@@ -5,6 +5,7 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme
 import { GradientButton } from './GradientButton';
 import { SafetyChecklistCard } from './SafetyChecklistCard';
 import {
+  checklistItemsFor,
   compositeCareService,
   SafetyChecklistAnswers,
   SafetyChecklistStatusOut,
@@ -14,7 +15,6 @@ import type { BookingStatus } from '../types';
 interface Props {
   bookingId: string;
   status: BookingStatus;
-  materialIncluded?: boolean;
 }
 
 const EMPTY: Partial<SafetyChecklistAnswers> = {};
@@ -31,12 +31,17 @@ const NOT_ELIGIBLE: BookingStatus[] = [
 
 /**
  * Mirrors the nurse's checklist screen (Step 4's "Safety Verification
- * Card"). Only relevant for Composite Care Package bookings — silently
- * renders nothing otherwise, or before the visit has actually started (the
- * start-OTP handshake unlocks this on both apps simultaneously), so it's
- * safe to drop into the booking-detail screen unconditionally.
+ * Card"), for both guarded workflows — the questions differ between the
+ * Composite Care Package and Service-Only flows, and the backend tells us
+ * which set applies.
+ *
+ * Eligibility is decided by the API rather than by a prop: the status
+ * endpoint 404s for bookings that aren't running a guarded workflow (and for
+ * visits whose start-OTP handshake hasn't completed), which is exactly the
+ * "render nothing" case. That keeps this safe to drop into the
+ * booking-detail screen unconditionally.
  */
-export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, materialIncluded }) => {
+export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status }) => {
   const [checklistStatus, setChecklistStatus] = useState<SafetyChecklistStatusOut | null>(null);
   const [visible, setVisible] = useState(false);
   const [answers, setAnswers] = useState<Partial<SafetyChecklistAnswers>>(EMPTY);
@@ -44,7 +49,7 @@ export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, 
   const [discrepancy, setDiscrepancy] = useState<string[] | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const eligible = !!materialIncluded && !NOT_ELIGIBLE.includes(status);
+  const eligible = !NOT_ELIGIBLE.includes(status);
 
   const poll = useCallback(async () => {
     if (!eligible) return;
@@ -54,8 +59,8 @@ export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, 
       setVisible(true);
       if (s.quality_discrepancy) setDiscrepancy((prev) => prev ?? []);
     } catch {
-      // Visit hasn't started yet (start-OTP not verified), or this isn't a
-      // composite booking — nothing to show.
+      // Visit hasn't started yet (start-OTP not verified), or this booking
+      // isn't running a guarded workflow — nothing to show.
       setVisible(false);
     }
   }, [bookingId, eligible]);
@@ -100,9 +105,9 @@ export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, 
       <View style={[styles.card, styles.discCard]} testID="quality-discrepancy-banner">
         <Ionicons name="warning" size={22} color={Colors.error} />
         <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={styles.discTitle}>We've flagged this for a supervisor call</Text>
+          <Text style={styles.discTitle}>We&apos;ve flagged this for a supervisor call</Text>
           <Text style={styles.discBody}>
-            Your answers didn't match what the nurse reported. A supervisor will call you shortly,
+            Your answers didn&apos;t match what the nurse reported. A supervisor will call you shortly,
             before the procedure continues.
           </Text>
         </View>
@@ -119,6 +124,20 @@ export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, 
     );
   }
 
+  if (checklistStatus.supply_issue_reported) {
+    return (
+      <View style={[styles.card, styles.discCard]} testID="supply-issue-banner">
+        <Ionicons name="alert-circle" size={22} color={Colors.error} />
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <Text style={styles.discTitle}>Your nurse reported a problem with the supplies</Text>
+          <Text style={styles.discBody}>
+            The procedure is on hold while our team reviews this. Someone will contact you shortly.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   if (checklistStatus.both_submitted) {
     return (
       <View style={[styles.card, styles.doneCard]} testID="safety-verified">
@@ -128,19 +147,22 @@ export const PatientSafetyVerification: React.FC<Props> = ({ bookingId, status, 
     );
   }
 
+  const items = checklistItemsFor(checklistStatus.material_included);
+
   return (
     <View>
       <SafetyChecklistCard
         title="Safety verification"
         subtitle="Your nurse just completed their pre-procedure checklist. Please confirm independently and answer honestly — this helps us catch any missed step before the procedure starts."
         values={answers}
+        items={items}
         onChange={(key, value) => setAnswers((s) => ({ ...s, [key]: value }))}
       />
       <GradientButton
         title={submitting ? 'Submitting…' : 'Confirm'}
         onPress={submit}
         loading={submitting}
-        disabled={Object.keys(answers).length !== 5}
+        disabled={items.some((i) => answers[i.key] === undefined)}
         style={{ marginTop: Spacing.md }}
         testID="submit-patient-verification"
       />
