@@ -74,10 +74,10 @@ interface QuickAction {
 }
 
 const QUICK_ACTIONS: QuickAction[] = [
-  { icon: 'pulse-outline',       label: 'Log Vitals',    color: Colors.teal,    route: 'vitals'      },
-  { icon: 'medical-outline',     label: 'Medication',    color: Colors.primary, route: 'medication'  },
-  { icon: 'checkbox-outline',    label: 'Checklist',     color: '#8B5CF6',      route: 'checklist'   },
-  { icon: 'warning-outline',     label: 'Escalate',      color: Colors.error,   route: 'escalation'  },
+  { icon: 'pulse-outline', label: 'Log Vitals', color: Colors.teal, route: 'vitals' },
+  { icon: 'medical-outline', label: 'Medication', color: Colors.primary, route: 'medication' },
+  { icon: 'checkbox-outline', label: 'Checklist', color: '#8B5CF6', route: 'checklist' },
+  { icon: 'warning-outline', label: 'Escalate', color: Colors.error, route: 'escalation' },
 ];
 
 // ── Main screen ───────────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ export default function NurseVisitScreen() {
       setVisit(record);
       // Refresh the assignment list so the dashboard and Visits tab reflect
       // the in-progress state rather than still showing "assigned".
-      useStore.getState().refreshAssignmentsAPI().catch(() => {});
+      useStore.getState().refreshAssignmentsAPI().catch(() => { });
       if (booking?.guardedWorkflow) {
         router.replace({ pathname: '/composite-visit/[id]', params: { id: bookingId! } });
         return;
@@ -245,7 +245,7 @@ export default function NurseVisitScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <Header title="Visit complete" />
-        <View style={styles.center}>
+        <ScrollView contentContainerStyle={{ padding: Spacing.lg, alignItems: 'center' }}>
           <Ionicons name="checkmark-circle" size={64} color={Colors.teal} />
           <Text style={styles.completedTitle}>Visit completed</Text>
           <Text style={styles.completedSub}>
@@ -253,13 +253,31 @@ export default function NurseVisitScreen() {
               ? `Duration: ${visit.actual_duration_minutes} minutes`
               : 'All done!'}
           </Text>
+
+          {(!!visit?.family_summary || !!visit?.care_notes) && (
+            <View style={[styles.bookingCard, { width: '100%', marginTop: Spacing.lg }]}>
+              {!!visit?.family_summary && (
+                <>
+                  <Text style={styles.reportLabel}>Summary shared with family</Text>
+                  <Text style={styles.reportBody}>{visit.family_summary}</Text>
+                </>
+              )}
+              {!!visit?.care_notes && (
+                <>
+                  <Text style={[styles.reportLabel, { marginTop: Spacing.md }]}>Care notes</Text>
+                  <Text style={styles.reportBody}>{visit.care_notes}</Text>
+                </>
+              )}
+            </View>
+          )}
+
           <TouchableOpacity
-            style={styles.doneBtn}
+            style={[styles.doneBtn, { marginTop: Spacing.lg }]}
             onPress={() => router.replace('/(nurse)/assignments')}
           >
             <Text style={styles.doneBtnTxt}>Back to assignments</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -553,5 +571,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
   },
+  reportLabel: { ...Typography.small, color: Colors.textTertiary },
+  reportBody: { ...Typography.body, color: Colors.textPrimary, marginTop: 4, lineHeight: 21 },
   doneBtnTxt: { ...Typography.bodyBold, color: '#fff', fontWeight: '700' as const },
 });
