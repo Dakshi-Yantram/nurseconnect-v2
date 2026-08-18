@@ -24,6 +24,7 @@ import {
   type BackendUser,
 } from '../services/auth.service';
 import { isWebOnlyRole, portalHome, WEB_ONLY_ROLE_LABEL, type AppRole } from '../lib/roles';
+import { PROVIDER_TYPES, type ProviderType } from '../constants/providerTypes';
 
 type Mode = 'signin' | 'register' | 'verify' | 'otp_phone' | 'otp_code';
 
@@ -64,7 +65,7 @@ export default function Login() {
   const [regEmail, setRegEmail] = useState('');
   const [regPhone, setRegPhone] = useState('');
   const [regPassword, setRegPassword] = useState('');
-  const [workerType, setWorkerType] = useState<'nurse' | 'caregiver'>('nurse');
+  const [workerType, setWorkerType] = useState<ProviderType>('nurse');
 
   // verify email
   const [verifyEmail, setVerifyEmail] = useState('');
@@ -511,21 +512,24 @@ export default function Login() {
                 {entry === 'nurse' && (
                   <>
                     <Text style={styles.fieldLabel}>I work as a</Text>
-                    <View style={styles.segmented}>
-                      {(['nurse', 'caregiver'] as const).map((t) => (
+                    <View style={styles.providerTypeGrid}>
+                      {PROVIDER_TYPES.map((t) => (
                         <TouchableOpacity
-                          key={t}
-                          style={[styles.segment, workerType === t && styles.segmentActive]}
-                          onPress={() => setWorkerType(t)}
-                          testID={`reg-worker-${t}`}
+                          key={t.value}
+                          style={[
+                            styles.providerTypeChip,
+                            workerType === t.value && styles.segmentActive,
+                          ]}
+                          onPress={() => setWorkerType(t.value)}
+                          testID={`reg-worker-${t.value}`}
                         >
                           <Text
                             style={[
                               styles.segmentTxt,
-                              workerType === t && { color: '#fff', fontWeight: '700' },
+                              workerType === t.value && { color: '#fff', fontWeight: '700' },
                             ]}
                           >
-                            {t === 'nurse' ? 'Nurse' : 'Caregiver'}
+                            {t.label}
                           </Text>
                         </TouchableOpacity>
                       ))}
@@ -647,6 +651,18 @@ const styles = StyleSheet.create({
   },
   segmentActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   segmentTxt: { ...Typography.body, color: Colors.textPrimary },
+  providerTypeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  providerTypeChip: {
+    minWidth: '31%',
+    flexGrow: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+  },
   staffHint: {
     ...Typography.small,
     color: Colors.textTertiary,

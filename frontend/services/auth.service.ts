@@ -10,6 +10,7 @@
 import { api, type RequestOptions } from '../lib/api';
 import { authStorage } from '../lib/auth-storage';
 import { toAppRole, toBackendRole, type AppRole, type BackendRole, type SelfRegisterRole } from '../lib/roles';
+import type { ProviderType } from '../constants/providerTypes';
 
 export type { AppRole, BackendRole } from '../lib/roles';
 export { toAppRole, toBackendRole } from '../lib/roles';
@@ -109,7 +110,7 @@ export const authService = {
     phone: string;
     password: string;
     role: SelfRegisterRole;
-    worker_type?: 'nurse' | 'caregiver';
+    worker_type?: ProviderType;
   }): Promise<RegisterResponse> {
     return api.post<RegisterResponse>(
       '/auth/register',

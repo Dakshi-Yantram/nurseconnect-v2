@@ -1,11 +1,12 @@
 import { api } from '../lib/api';
+import type { ProviderType } from '../constants/providerTypes';
 
 export interface WorkerMeOut {
   id: string;
   user_id: string;
   tier: string;
   gender: string | null;
-  worker_type?: 'nurse' | 'caregiver';
+  worker_type?: ProviderType;
   onboarding_status: string;
   availability: 'online' | 'offline' | 'busy' | 'on_leave';
   bio: string | null;
@@ -84,7 +85,7 @@ export interface DocumentCatalogueEntry {
 
 export interface OnboardingSnapshot {
   onboarding_status: string;
-  worker_type: 'nurse' | 'caregiver';
+  worker_type: ProviderType;
   background_check_status: string;
   documents: DocumentCatalogueEntry[];
   missing_profile_fields: string[];
