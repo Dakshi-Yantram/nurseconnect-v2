@@ -31,6 +31,13 @@ export interface CallState {
   isSpeakerOn: boolean;
   durationSeconds: number;
   error: string | null;
+  /** Local camera. Off by default on every call — the user opts in mid-call. */
+  isVideoOn: boolean;
+  /** Whether the *other* party currently has their camera on. */
+  isPeerVideoOn: boolean;
+  /** Raw WebRTC tracks for CallOverlay to hand to RTCView. Null when off. */
+  localVideoTrack: any;
+  peerVideoTrack: any;
 }
 
 const INITIAL: CallState = {
@@ -43,6 +50,10 @@ const INITIAL: CallState = {
   isSpeakerOn: false,
   durationSeconds: 0,
   error: null,
+  isVideoOn: false,
+  isPeerVideoOn: false,
+  localVideoTrack: null,
+  peerVideoTrack: null,
 };
 
 type Listener = (state: CallState) => void;
@@ -274,8 +285,38 @@ class CallManager {
     this.set({ isSpeakerOn: next });
   }
 
+  // --------------------------------------------------------------- video --
+  /**
+   * Turns the local camera on/off mid-call. Off by default on every call —
+   * the original "never request the camera" rule for the *default* state
+   * stands; this is an explicit opt-in the user taps for themselves, same
+   * spirit as WhatsApp/Google Meet starting audio-only and letting either
+   * side add video later. The CAMERA permission this needs is already
+   * declared for both platforms (Android: app.config.js `permissions`; iOS:
+   * `NSCameraUsageDescription`) because clinical-photo capture uses it too
+   * — Dyte's `enableVideo()` triggers the native OS prompt itself the first
+   * time it's called, same as any other WebRTC getUserMedia() call.
+   */
+  async toggleVideo(): Promise<void> {
+    if (!this.meeting) return;
+    try {
+      if (this.state.isVideoOn) {
+        await this.meeting.self.disableVideo();
+      } else {
+        await this.meeting.self.enableVideo();
+      }
+      // `videoUpdate` (wired in joinMeeting) updates isVideoOn/localVideoTrack
+      // once the SDK confirms the change; no need to set state here too.
+    } catch (e: any) {
+      // Most common cause: user denied the camera permission prompt, or
+      // another app is holding the camera. Never fail the call over this.
+      this.set({ error: this.describe(e, 'Could not access camera') });
+    }
+  }
+
   // ------------------------------------------------------------ internals --
-  /** Attach to the Dyte meeting with a participant token. Audio only. */
+  /** Attach to the Dyte meeting with a participant token. Starts audio-only —
+   * see `toggleVideo()` for how the camera gets turned on mid-call. */
   private async joinMeeting(authToken: string): Promise<void> {
     const rtk = getRealtimeKit();
     if (!rtk) throw new Error('Calling is unavailable in this build');
@@ -287,8 +328,9 @@ class CallManager {
     });
     this.meeting = meeting;
 
-    // Never request the camera — this is a voice product, and asking for
-    // video permission on a care call is both wrong and alarming.
+    // Start audio-only, camera stays off until the user explicitly taps the
+    // video toggle (see toggleVideo()) — asking for the camera unprompted on
+    // a care call is still wrong; this just adds the opt-in path.
     try {
       meeting.self?.disableVideo?.();
       meeting.self?.enableAudio?.();
@@ -304,6 +346,45 @@ class CallManager {
       this.stopTimer();
       if (this.state.phase !== 'idle') this.hangUp('completed');
     });
+
+    // Local camera on/off — fires for both toggleVideo() calls and any
+    // server-side forced mute (e.g. an admin disabling video for everyone).
+    meeting.self?.on?.('videoUpdate', () => {
+      this.set({
+        isVideoOn: !!meeting.self?.videoEnabled,
+        localVideoTrack: meeting.self?.videoTrack ?? null,
+      });
+    });
+
+    // Remote party's camera. `meeting.participants.joined` covers whoever is
+    // already in the room by the time we attach these listeners too, since
+    // Dyte replays current state to new listeners on most SDK versions —
+    // but sync explicitly below in case a given build doesn't.
+    try {
+      meeting.participants?.joined?.on?.('videoUpdate', (participant: any) => {
+        this.set({
+          isPeerVideoOn: !!participant?.videoEnabled,
+          peerVideoTrack: participant?.videoTrack ?? null,
+        });
+      });
+      meeting.participants?.joined?.on?.('participantJoined', (participant: any) => {
+        if (participant?.videoEnabled) {
+          this.set({ isPeerVideoOn: true, peerVideoTrack: participant.videoTrack ?? null });
+        }
+      });
+      meeting.participants?.joined?.on?.('participantLeft', () => {
+        this.set({ isPeerVideoOn: false, peerVideoTrack: null });
+      });
+      // Explicit sync for whoever is already present when we join.
+      const already = meeting.participants?.joined?.toArray?.() ?? [];
+      const withVideo = already.find((p: any) => p?.videoEnabled);
+      if (withVideo) {
+        this.set({ isPeerVideoOn: true, peerVideoTrack: withVideo.videoTrack ?? null });
+      }
+    } catch {
+      // Remote video is a nice-to-have; never fail the call over listener
+      // wiring differences across SDK versions.
+    }
 
     await meeting.joinRoom();
     // Some SDK builds resolve joinRoom before emitting roomJoined; make sure
