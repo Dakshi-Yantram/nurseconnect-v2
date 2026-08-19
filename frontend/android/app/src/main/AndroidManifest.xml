@@ -4,9 +4,11 @@
   <uses-permission android:name="android.permission.BIND_TELECOM_CONNECTION_SERVICE"/>
   <uses-permission android:name="android.permission.CALL_PHONE"/>
   <!-- Required to open the device camera from expo-image-picker's
-       launchCameraAsync(). Without this the OS can't be asked for the
-       permission at all (requestCameraPermissionsAsync() resolves
-       granted=false every time) and the camera never opens. -->
+       launchCameraAsync(), and to power the optional video toggle on
+       in-app Dyte calls (lib/call-manager.ts toggleVideo()). Without this
+       the OS can't be asked for the permission at all
+       (requestCameraPermissionsAsync() resolves granted=false every time)
+       and the camera never opens. -->
   <uses-permission android:name="android.permission.CAMERA"/>
   <uses-feature android:name="android.hardware.camera" android:required="false"/>
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>

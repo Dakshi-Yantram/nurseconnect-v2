@@ -63,7 +63,7 @@ module.exports = () => ({
         NSPhotoLibraryUsageDescription:
           'NurseConnect needs photo access so you can upload verification documents and clinical photos.',
         NSCameraUsageDescription:
-          'NurseConnect uses the camera to capture clinical documentation during a visit.',
+          'NurseConnect uses the camera to capture clinical documentation during a visit, and — if you choose to turn it on — for video during in-app calls.',
         // `voip` is what makes iOS issue a PushKit token at all; `audio` keeps
         // a call alive when the screen locks.
         UIBackgroundModes: ['voip', 'audio', 'remote-notification'],
@@ -95,7 +95,9 @@ module.exports = () => ({
         // Required to raise the incoming-call screen over the lock screen.
         'android.permission.USE_FULL_SCREEN_INTENT',
         'android.permission.WAKE_LOCK',
-        // Clinical photo capture/upload (Assessment/Visit Details screen).
+        // Clinical photo capture/upload (Assessment/Visit Details screen),
+        // and — since this same permission gates it — the optional video
+        // toggle on in-app calls (see lib/call-manager.ts toggleVideo()).
         // Without CAMERA declared here, requestCameraPermissionsAsync()
         // resolves granted=false unconditionally and the camera can never
         // open, even if the user taps "Allow" — the OS never shows a
@@ -135,7 +137,7 @@ module.exports = () => ({
           photosPermission:
             'NurseConnect needs photo library access so you can attach clinical photos during a visit.',
           cameraPermission:
-            'NurseConnect uses the camera to capture clinical documentation during a visit.',
+            'NurseConnect uses the camera to capture clinical documentation during a visit, and — if you choose to turn it on — for video during in-app calls.',
         },
       ],
       // Only when credentials are present — see the note at the top.
