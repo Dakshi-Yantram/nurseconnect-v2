@@ -36,6 +36,7 @@ let _callKeep: any;
 let _voipPush: any;
 let _messaging: any;
 let _dyte: any;
+let _webrtc: any;
 
 /** react-native-callkeep — CallKit on iOS, ConnectionService on Android. */
 export function getCallKeep(): any | null {
@@ -79,6 +80,22 @@ export function getRealtimeKit(): any | null {
     );
   }
   return _dyte;
+}
+
+/**
+ * @cloudflare/react-native-webrtc — RTCView/MediaStream, needed to actually
+ * render a video track once the call turns the camera on. Dyte's core SDK
+ * hands back raw WebRTC MediaStreamTrack objects; this is what paints them
+ * to the screen. Same guarded-require pattern as everything else here.
+ */
+export function getWebRTC(): any | null {
+  if (_webrtc === undefined) {
+    _webrtc = safeRequire(
+      () => require('@cloudflare/react-native-webrtc'),
+      '@cloudflare/react-native-webrtc',
+    );
+  }
+  return _webrtc;
 }
 
 /**
