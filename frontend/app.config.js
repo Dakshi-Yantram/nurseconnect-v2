@@ -21,7 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BUNDLE_ID = 'com.yantrammedtech.nurseconnect';
+const BUNDLE_ID = 'in.co.nurseconnect.partner';
 
 const GOOGLE_SERVICES_ANDROID = './google-services.json';
 const GOOGLE_SERVICES_IOS = './GoogleService-Info.plist';
