@@ -141,6 +141,10 @@ export interface Booking {
   serviceOnlyWorkflow?: boolean;
   /** Either guarded workflow — both run the synchronized safety checklist. */
   guardedWorkflow?: boolean;
+  /** Workflow 2 — patient's tick-list of what they say they have ready. */
+  patientSupplyConfirmation?: Record<string, boolean> | null;
+  /** Workflow 2 — photo of the patient's own supplies, taken at booking time. */
+  patientSupplyPhotoUrl?: string | null;
 }
 
 export interface VisitTimelineStep {
