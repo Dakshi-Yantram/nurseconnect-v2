@@ -7,6 +7,12 @@ export interface CarePackageOut {
   name: string;
   tagline: string | null;
   description: string | null;
+  /** Bullet list shown under "What's included" once the card is expanded. */
+  whats_included: string[] | null;
+  /** 1-2 sentence "Service details" line in the expanded card. */
+  service_details_text: string | null;
+  /** Shown only when present — the card omits the section otherwise. */
+  important_information: string | null;
   target_condition: string | null;
   min_tier: string;
   visit_frequency: string;

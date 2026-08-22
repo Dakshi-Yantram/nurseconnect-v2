@@ -82,20 +82,28 @@ export default function CareTypes() {
   );
 }
 
+/**
+ * Collapsed card answers "what is this and is it relevant to me?"; tapping
+ * "View details" expands the SAME card inline (not a new screen) to answer
+ * "exactly what am I getting if I book this?". "Book" always sits next to
+ * the toggle so booking never requires opening details first.
+ */
 const PackageCard: React.FC<{ pkg: CarePackageOut; onPress: () => void }> = ({ pkg, onPress }) => {
+  const [expanded, setExpanded] = useState(false);
+
   // Package price is the headline where one is set; otherwise it's billed per
   // visit. Showing both would misrepresent what the consumer actually pays.
   const packagePrice = parseFloat(pkg.package_price ?? '');
   const perVisit = parseFloat(pkg.per_visit_price ?? '');
   const hasPackagePrice = !isNaN(packagePrice) && packagePrice > 0;
 
+  const hasDetails =
+    (pkg.whats_included?.length ?? 0) > 0 ||
+    !!pkg.service_details_text ||
+    !!pkg.important_information;
+
   return (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.85}
-      onPress={onPress}
-      testID={`package-${pkg.id}`}
-    >
+    <View style={styles.card} testID={`package-${pkg.id}`}>
       <View style={styles.cardHead}>
         <View style={styles.iconWrap}>
           <Ionicons name="medkit" size={22} color={Colors.primary} />
@@ -107,7 +115,7 @@ const PackageCard: React.FC<{ pkg: CarePackageOut; onPress: () => void }> = ({ p
       </View>
 
       {!!pkg.description && (
-        <Text style={styles.desc} numberOfLines={3}>
+        <Text style={styles.desc} numberOfLines={expanded ? undefined : 3}>
           {pkg.description}
         </Text>
       )}
@@ -123,17 +131,72 @@ const PackageCard: React.FC<{ pkg: CarePackageOut; onPress: () => void }> = ({ p
         {pkg.subsidy_eligible && <Meta icon="ribbon-outline" text="Subsidy eligible" />}
       </View>
 
+      {expanded && hasDetails && (
+        <View style={styles.detailsPane}>
+          {(pkg.whats_included?.length ?? 0) > 0 && (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailHeading}>What's included</Text>
+              {pkg.whats_included!.map((item, i) => (
+                <View key={i} style={styles.bulletRow}>
+                  <Text style={styles.bulletDot}>{'\u2022'}</Text>
+                  <Text style={styles.bulletTxt}>{item}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {!!pkg.service_details_text && (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailHeading}>Service details</Text>
+              <Text style={styles.detailBody}>{pkg.service_details_text}</Text>
+            </View>
+          )}
+
+          {!!pkg.important_information && (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailHeading}>Important information</Text>
+              <Text style={styles.detailBody}>{pkg.important_information}</Text>
+            </View>
+          )}
+        </View>
+      )}
+
       <View style={styles.footer}>
         <View>
           <Text style={styles.priceLabel}>{hasPackagePrice ? 'Package price' : 'Per visit'}</Text>
           <Text style={styles.price}>{inr(hasPackagePrice ? packagePrice : perVisit)}</Text>
         </View>
-        <View style={styles.cta}>
-          <Text style={styles.ctaTxt}>Book</Text>
-          <Ionicons name="arrow-forward" size={16} color="#fff" />
+
+        <View style={styles.actionsRow}>
+          {hasDetails && (
+            <TouchableOpacity
+              style={styles.viewDetailsBtn}
+              activeOpacity={0.7}
+              onPress={() => setExpanded((v) => !v)}
+              testID={`package-${pkg.id}-toggle-details`}
+            >
+              <Text style={styles.viewDetailsTxt}>
+                {expanded ? 'View less' : 'View details'}
+              </Text>
+              <Ionicons
+                name={expanded ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color={Colors.primary}
+              />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.cta}
+            activeOpacity={0.85}
+            onPress={onPress}
+            testID={`package-${pkg.id}-book`}
+          >
+            <Text style={styles.ctaTxt}>Book</Text>
+            <Ionicons name="arrow-forward" size={16} color="#fff" />
+          </TouchableOpacity>
         </View>
       </View>
-    </TouchableOpacity>
+    </View>
   );
 };
 
@@ -185,6 +248,15 @@ const styles = StyleSheet.create({
   },
   priceLabel: { ...Typography.caption, color: Colors.textTertiary },
   price: { ...Typography.h3, color: Colors.textPrimary, fontWeight: '800' as const, marginTop: 2 },
+  actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  viewDetailsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  viewDetailsTxt: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
   cta: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -195,4 +267,26 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   ctaTxt: { ...Typography.small, color: '#fff', fontWeight: '700' as const },
+  // Expanded card content — an inline extension of the same card, not a new
+  // screen. Sits between the metadata row and the price/actions footer.
+  detailsPane: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.divider,
+    gap: Spacing.sm,
+  },
+  detailBlock: { marginBottom: 10 },
+  detailHeading: {
+    ...Typography.caption,
+    color: Colors.textPrimary,
+    fontWeight: '700' as const,
+    marginBottom: 6,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.3,
+  },
+  detailBody: { ...Typography.small, color: Colors.textSecondary, lineHeight: 19 },
+  bulletRow: { flexDirection: 'row', marginBottom: 3 },
+  bulletDot: { ...Typography.small, color: Colors.textSecondary, marginRight: 6 },
+  bulletTxt: { ...Typography.small, color: Colors.textSecondary, lineHeight: 19, flex: 1 },
 });
