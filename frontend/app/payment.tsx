@@ -40,7 +40,7 @@ import {
   type BackendPaymentOrder,
 } from '../services/payments.service';
 import { mapBooking } from '../services/mappers';
-import { formatDay, formatTime, inr } from '../lib/format';
+import { formatDay, formatTime, humanize, inr } from '../lib/format';
 import type { Booking } from '../types';
 
 export default function Payment() {
@@ -71,6 +71,19 @@ export default function Payment() {
       'Home nursing visit',
     [packages, services],
   );
+
+  // The booking summary previously showed only the package name and price —
+  // no detail on what the visit actually includes. The package (and, for a
+  // standalone service booking, the service) already carry that description,
+  // they just weren't being looked up and shown here.
+  const matchedPackage = booking?.packageId
+    ? packages.find((p) => p.id === booking.packageId) ?? null
+    : null;
+  const matchedService = booking?.serviceId
+    ? services.find((s) => s.id === booking.serviceId) ?? null
+    : null;
+  const careDescription = matchedPackage?.description || matchedService?.description || '';
+  const careTagline = matchedPackage?.tagline || '';
 
   useEffect(() => {
     let cancelled = false;
@@ -223,6 +236,43 @@ export default function Payment() {
           </View>
         </View>
 
+        {/* --------------------------------------------- what's included --- */}
+        {(careDescription || matchedPackage) && (
+          <View style={styles.includedCard}>
+            <Text style={styles.includedTitle}>What's included</Text>
+            {!!careTagline && <Text style={styles.includedTagline}>{careTagline}</Text>}
+            {!!careDescription && <Text style={styles.includedDesc}>{careDescription}</Text>}
+
+            {!!matchedPackage && (
+              <View style={styles.includedMetaRow}>
+                {!!matchedPackage.visit_frequency && (
+                  <IncludedMeta
+                    icon="repeat-outline"
+                    text={humanize(matchedPackage.visit_frequency)}
+                  />
+                )}
+                {!!matchedPackage.visits_per_cycle && (
+                  <IncludedMeta
+                    icon="calendar-outline"
+                    text={`${matchedPackage.visits_per_cycle} visit${
+                      matchedPackage.visits_per_cycle === 1 ? '' : 's'
+                    }`}
+                  />
+                )}
+                {!!matchedPackage.shift_hours && (
+                  <IncludedMeta icon="time-outline" text={`${matchedPackage.shift_hours}h shift`} />
+                )}
+                {!!matchedPackage.requires_prescription && (
+                  <IncludedMeta icon="document-text-outline" text="Prescription required" />
+                )}
+                {!!matchedPackage.subsidy_eligible && (
+                  <IncludedMeta icon="ribbon-outline" text="Subsidy eligible" />
+                )}
+              </View>
+            )}
+          </View>
+        )}
+
         <View style={styles.noticeCard}>
           <Ionicons name="information-circle" size={18} color={Colors.primary} />
           <Text style={styles.noticeTxt}>
@@ -272,6 +322,16 @@ export default function Payment() {
   );
 }
 
+const IncludedMeta: React.FC<{ icon: keyof typeof Ionicons.glyphMap; text: string }> = ({
+  icon,
+  text,
+}) => (
+  <View style={styles.includedMeta}>
+    <Ionicons name={icon} size={13} color={Colors.textSecondary} />
+    <Text style={styles.includedMetaTxt}>{text}</Text>
+  </View>
+);
+
 const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <View style={styles.sumRow}>
     <Text style={styles.sumL}>{label}</Text>
@@ -310,6 +370,28 @@ const styles = StyleSheet.create({
   },
   totalL: { ...Typography.h4, color: Colors.textPrimary },
   totalR: { ...Typography.h2, color: Colors.primary, fontWeight: '800' as const },
+  includedCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.card,
+    marginTop: Spacing.md,
+    ...Shadows.card,
+  },
+  includedTitle: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 6 },
+  includedTagline: {
+    ...Typography.small,
+    color: Colors.textSecondary,
+    fontStyle: 'italic',
+    marginBottom: 8,
+  },
+  includedDesc: { ...Typography.body, color: Colors.textPrimary, lineHeight: 21 },
+  includedMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 12 },
+  includedMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  includedMetaTxt: {
+    ...Typography.caption,
+    color: Colors.textSecondary,
+    fontWeight: '600' as const,
+  },
   noticeCard: {
     flexDirection: 'row',
     gap: 10,

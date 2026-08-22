@@ -1,11 +1,18 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/theme';
 import { useRequireRole } from '../../lib/use-require-role';
 
 export default function FamilyLayout() {
   useRequireRole('family');
+  // A hardcoded tab bar height doesn't leave room for the home-indicator
+  // safe area on notched/gesture-nav phones, so the bottom row of icons
+  // ends up sitting under the OS gesture strip — visible, but the system
+  // steals the touch before the tab bar ever sees it. Extend the bar by the
+  // actual bottom inset instead of guessing a fixed padding.
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -16,9 +23,9 @@ export default function FamilyLayout() {
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopColor: Colors.divider,
-          height: 64,
+          height: 54 + insets.bottom,
           paddingTop: 6,
-          paddingBottom: 10,
+          paddingBottom: Math.max(10, insets.bottom),
         },
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
