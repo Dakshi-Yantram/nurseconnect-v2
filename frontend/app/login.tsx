@@ -341,6 +341,20 @@ export default function Login() {
                     Prefer a password? <Text style={styles.switchLink}>Sign in with email</Text>
                   </Text>
                 </TouchableOpacity>
+                {canRegister && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      clearMessages();
+                      setMode('register');
+                    }}
+                    style={styles.switchRow}
+                    testID="login-register-otp"
+                  >
+                    <Text style={styles.switchTxt}>
+                      New here? <Text style={styles.switchLink}>Create an account</Text>
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </>
             )}
 
