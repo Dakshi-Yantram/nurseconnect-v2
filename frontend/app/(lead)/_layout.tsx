@@ -1,6 +1,7 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/theme';
 import { useRequireRole } from '../../lib/use-require-role';
 
@@ -14,6 +15,9 @@ import { useRequireRole } from '../../lib/use-require-role';
  */
 export default function LeadLayout() {
   useRequireRole('clinical_lead');
+  // See app/(family)/_layout.tsx — a fixed tab bar height doesn't account
+  // for the home-indicator safe area on notched/gesture-nav phones.
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -24,9 +28,9 @@ export default function LeadLayout() {
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopColor: Colors.divider,
-          height: 64,
+          height: 54 + insets.bottom,
           paddingTop: 6,
-          paddingBottom: 10,
+          paddingBottom: Math.max(10, insets.bottom),
         },
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
