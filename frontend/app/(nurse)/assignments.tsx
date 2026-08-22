@@ -309,6 +309,21 @@ const VisitRow: React.FC<{
         </View>
       )}
 
+      {mode !== 'past' && booking.serviceOnlyWorkflow && (
+        <View style={styles.suppliesChip}>
+          <Ionicons
+            name={booking.patientSupplyPhotoUrl ? 'camera' : 'alert-circle-outline'}
+            size={13}
+            color={booking.patientSupplyPhotoUrl ? Colors.primary : Colors.warning}
+          />
+          <Text style={styles.suppliesChipTxt}>
+            {booking.patientSupplyPhotoUrl
+              ? 'Patient supplies photo available — check before you travel'
+              : 'No supplies photo uploaded yet'}
+          </Text>
+        </View>
+      )}
+
       <View style={styles.footer}>
         <View>
           <Text style={styles.payLabel}>Visit value</Text>
@@ -424,6 +439,17 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   notesTxt: { ...Typography.small, color: Colors.textSecondary, lineHeight: 17 },
+  suppliesChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    backgroundColor: Colors.infoBg,
+    borderRadius: Radius.md,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  suppliesChipTxt: { ...Typography.caption, color: Colors.textSecondary, flex: 1 },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',

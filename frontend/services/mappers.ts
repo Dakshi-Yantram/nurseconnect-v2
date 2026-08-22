@@ -192,6 +192,10 @@ export function mapBooking(
     // Either guarded workflow — what the safety-checklist and completion-OTP
     // surfaces key off, since both run those steps.
     guardedWorkflow: !!b.material_included || !!b.patient_supply_confirmation,
+    // So the nurse can check the patient's own supplies BEFORE travelling,
+    // not just at OTP time after arriving at the address.
+    patientSupplyConfirmation: b.patient_supply_confirmation ?? null,
+    patientSupplyPhotoUrl: b.patient_supply_photo_url ?? null,
   };
 }
 
