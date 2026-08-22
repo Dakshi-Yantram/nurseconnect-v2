@@ -17,7 +17,7 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-     "package": "in.co.nurseconnect.partner"
+      "package": "in.co.nurseconnect.partner"
     },
     "web": {
       "bundler": "metro",
@@ -45,8 +45,9 @@
       "router": {},
       "firebaseConfigured": false,
       "eas": {
-        "projectId": "1375e8db-cf00-4227-a082-3ebd02170b70"
+        "projectId": "8853574c-958c-4f28-aafb-73328067d937"
       }
-    }
+    },
+    "owner": "yantrammedtechs-team"
   }
 }
