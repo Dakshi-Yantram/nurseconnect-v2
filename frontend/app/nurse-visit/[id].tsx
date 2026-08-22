@@ -39,6 +39,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -52,6 +53,7 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/th
 import { api } from '../../lib/api';
 import { useStore } from '../../store';
 import { callManager } from '../../lib/call-manager';
+import { SUPPLY_CONFIRMATION_ITEMS } from '../../services/composite-care.service';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface VisitRecord {
@@ -304,6 +306,55 @@ export default function NurseVisitScreen() {
               </View>
             )}
 
+            {/* Patient's own supplies (Workflow 2) — check BEFORE travelling,
+                not after arriving, so a missing/expired item doesn't waste
+                the trip. */}
+            {booking?.serviceOnlyWorkflow && (
+              <View style={styles.suppliesCard}>
+                <View style={styles.suppliesHead}>
+                  <Ionicons name="camera-outline" size={18} color={Colors.primary} />
+                  <Text style={styles.suppliesTitle}>Patient's supplies</Text>
+                </View>
+                <Text style={styles.suppliesSub}>
+                  The family uploaded this at booking. Check it matches what's needed before
+                  you head out — you'll verify the physical items again on arrival.
+                </Text>
+
+                {booking.patientSupplyPhotoUrl ? (
+                  <Image
+                    source={{ uri: booking.patientSupplyPhotoUrl }}
+                    style={styles.supplyPhoto}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.supplyPhotoMissing}>
+                    <Ionicons name="alert-circle-outline" size={18} color={Colors.warning} />
+                    <Text style={styles.supplyPhotoMissingTxt}>
+                      No supply photo on file for this booking yet.
+                    </Text>
+                  </View>
+                )}
+
+                {!!booking.patientSupplyConfirmation && (
+                  <View style={{ marginTop: Spacing.md }}>
+                    {SUPPLY_CONFIRMATION_ITEMS.map((item) => {
+                      const confirmed = booking.patientSupplyConfirmation?.[item.key] === true;
+                      return (
+                        <View key={item.key} style={styles.supplyItemRow}>
+                          <Ionicons
+                            name={confirmed ? 'checkmark-circle' : 'close-circle'}
+                            size={16}
+                            color={confirmed ? Colors.success : Colors.danger}
+                          />
+                          <Text style={styles.supplyItemTxt}>{item.label}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            )}
+
             {/* OTP instruction */}
             <View style={styles.otpSection}>
               <View style={styles.iconCircle}>
@@ -446,6 +497,37 @@ const styles = StyleSheet.create({
   bookingPatient: { ...Typography.h3, color: Colors.textPrimary },
   bookingService: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
   bookingAddress: { ...Typography.small, color: Colors.textTertiary, marginTop: 4 },
+
+  // Patient-supplied materials verification
+  suppliesCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    ...Shadows.card,
+  },
+  suppliesHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  suppliesTitle: { ...Typography.h4, color: Colors.textPrimary },
+  suppliesSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 6, lineHeight: 18 },
+  supplyPhoto: {
+    width: '100%',
+    height: 180,
+    borderRadius: Radius.md,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  supplyPhotoMissing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.warningBg,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  supplyPhotoMissingTxt: { ...Typography.small, color: Colors.warning, flex: 1 },
+  supplyItemRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  supplyItemTxt: { ...Typography.small, color: Colors.textSecondary, flex: 1 },
 
   otpSection: { alignItems: 'center', paddingVertical: Spacing.lg },
   iconCircle: {
