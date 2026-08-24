@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
@@ -49,6 +49,15 @@ export default function Privacy() {
             </View>
           </TouchableOpacity>
         ))}
+
+        <TouchableOpacity
+          style={styles.danger}
+          onPress={() => Linking.openURL('https://nurseconnect.co.in/privacy-policy')}
+          testID="read-privacy-policy"
+        >
+          <Ionicons name="document-text-outline" size={18} color={Colors.primary} />
+          <Text style={styles.dangerTxt}>Read full privacy policy</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.danger}
