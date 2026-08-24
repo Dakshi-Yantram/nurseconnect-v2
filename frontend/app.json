@@ -17,7 +17,8 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "in.co.nurseconnect.partner"
+      "package": "in.co.nurseconnect.partner",
+      "versionCode": 5
     },
     "web": {
       "bundler": "metro",
