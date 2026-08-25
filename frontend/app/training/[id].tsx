@@ -42,7 +42,9 @@ export default function ModuleDetail() {
   const [error, setError] = useState('');
 
   const [quizOpen, setQuizOpen] = useState(false);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  // multi_select questions store an array of option indices; every other
+  // type stores a single index (booleans are still just "which option").
+  const [answers, setAnswers] = useState<Record<string, number | number[]>>({});
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<AssessmentSubmitResult | null>(null);
 
@@ -63,7 +65,12 @@ export default function ModuleDetail() {
   }, [load]);
 
   const questions = module?.assessment ?? [];
-  const allAnswered = questions.length > 0 && questions.every((q) => answers[q.id] !== undefined);
+  const allAnswered =
+    questions.length > 0 &&
+    questions.every((q) => {
+      const a = answers[q.id];
+      return q.type === 'multi_select' ? Array.isArray(a) && a.length > 0 : a !== undefined;
+    });
 
   const submitQuiz = async () => {
     if (!module || !allAnswered) return;
@@ -226,29 +233,55 @@ export default function ModuleDetail() {
         ) : (
           <>
             <Text style={styles.secTitle}>Quiz</Text>
-            {questions.map((q, qi) => (
-              <View key={q.id} style={styles.card} testID={`question-${q.id}`}>
-                <Text style={styles.question}>
-                  {qi + 1}. {q.question}
-                </Text>
-                {(q.options ?? []).map((opt, oi) => {
-                  const selected = answers[q.id] === oi;
-                  return (
-                    <TouchableOpacity
-                      key={oi}
-                      style={[styles.option, selected && styles.optionActive]}
-                      onPress={() => setAnswers((a) => ({ ...a, [q.id]: oi }))}
-                      testID={`option-${q.id}-${oi}`}
-                    >
-                      <View style={[styles.radio, selected && styles.radioOn]}>
-                        {selected && <View style={styles.radioDot} />}
-                      </View>
-                      <Text style={styles.optionTxt}>{opt}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
+            {questions.map((q, qi) => {
+              const isMulti = q.type === 'multi_select';
+              return (
+                <View key={q.id} style={styles.card} testID={`question-${q.id}`}>
+                  <Text style={styles.question}>
+                    {qi + 1}. {q.question}
+                  </Text>
+                  {(q.options ?? []).map((opt, oi) => {
+                    const current = answers[q.id];
+                    const selected = isMulti
+                      ? Array.isArray(current) && current.includes(oi)
+                      : current === oi;
+                    return (
+                      <TouchableOpacity
+                        key={oi}
+                        style={[styles.option, selected && styles.optionActive]}
+                        onPress={() =>
+                          setAnswers((a) => {
+                            if (!isMulti) return { ...a, [q.id]: oi };
+                            const prev = Array.isArray(a[q.id]) ? (a[q.id] as number[]) : [];
+                            const next = prev.includes(oi)
+                              ? prev.filter((x) => x !== oi)
+                              : [...prev, oi];
+                            return { ...a, [q.id]: next };
+                          })
+                        }
+                        testID={`option-${q.id}-${oi}`}
+                      >
+                        <View
+                          style={[
+                            isMulti ? styles.checkbox : styles.radio,
+                            selected && (isMulti ? styles.checkboxOn : styles.radioOn),
+                          ]}
+                        >
+                          {selected &&
+                            (isMulti ? (
+                              <Ionicons name="checkmark" size={13} color="#fff" />
+                            ) : (
+                              <View style={styles.radioDot} />
+                            ))}
+                        </View>
+                        <Text style={styles.optionTxt}>{opt}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {isMulti && <Text style={styles.hint}>Select all that apply.</Text>}
+                </View>
+              );
+            })}
 
             <GradientButton
               title={allAnswered ? 'Submit answers' : 'Answer every question to submit'}
@@ -328,6 +361,17 @@ const styles = StyleSheet.create({
   },
   radioOn: { borderColor: Colors.teal },
   radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.teal },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: { backgroundColor: Colors.teal, borderColor: Colors.teal },
+  hint: { ...Typography.small, color: Colors.textTertiary, marginTop: 4 },
   optionTxt: { ...Typography.body, color: Colors.textPrimary, flex: 1 },
   resultCard: { borderRadius: Radius.xl, padding: Spacing.lg, alignItems: 'center' },
   resultTitle: { ...Typography.h2, marginTop: 8 },
