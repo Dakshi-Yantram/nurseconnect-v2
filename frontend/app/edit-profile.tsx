@@ -30,6 +30,7 @@ import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Radius, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
 import { usersService } from '../services/users.service';
+import { normalizePhone } from '../services/auth.service';
 import { workerSelfService } from '../services/worker-self.service';
 
 export default function EditProfile() {
@@ -65,7 +66,9 @@ export default function EditProfile() {
       } else {
         const me = await usersService.me();
         setEmergencyName(me.emergency_contact_name ?? '');
-        setEmergencyPhone(me.emergency_contact_phone ?? '');
+        setEmergencyPhone(
+          (me.emergency_contact_phone ?? '').replace(/^\+?91/, '').replace(/[^0-9]/g, '').slice(0, 10),
+        );
       }
     } catch {
       // The form still renders; saving surfaces any real failure.
@@ -112,7 +115,7 @@ export default function EditProfile() {
       } else {
         await usersService.updateMe({
           emergency_contact_name: emergencyName.trim() || null,
-          emergency_contact_phone: emergencyPhone.trim() || null,
+          emergency_contact_phone: emergencyPhone.trim() ? normalizePhone(emergencyPhone) : null,
         });
       }
       router.back();
@@ -242,10 +245,12 @@ export default function EditProfile() {
               />
               <InputField
                 label="Contact number"
-                placeholder="+91 98xxxxxxxx"
+                prefix="+91"
+                placeholder="98xxxxxxxx"
                 keyboardType="phone-pad"
+                maxLength={10}
                 value={emergencyPhone}
-                onChangeText={setEmergencyPhone}
+                onChangeText={(v) => setEmergencyPhone(v.replace(/[^0-9]/g, '').slice(0, 10))}
                 iconLeft="call-outline"
                 testID="edit-emergency-phone"
               />

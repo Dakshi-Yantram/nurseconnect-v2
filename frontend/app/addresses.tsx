@@ -29,6 +29,7 @@ import { AsyncBoundary } from '../components/AsyncBoundary';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
+import { normalizePhone } from '../services/auth.service';
 import {
   addressesService,
   formatAddress,
@@ -86,7 +87,7 @@ export default function Addresses() {
       state: a.state ?? '',
       pincode: a.pincode ?? '',
       recipient_name: a.recipient_name ?? '',
-      recipient_phone: a.recipient_phone ?? '',
+      recipient_phone: (a.recipient_phone ?? '').replace(/^\+?91/, '').replace(/[^0-9]/g, '').slice(0, 10),
       is_default: a.is_default,
     });
     setCoords(a.latitude != null && a.longitude != null ? { lat: a.latitude, lng: a.longitude } : null);
@@ -144,6 +145,9 @@ export default function Addresses() {
     try {
       const payload: AddressInput = {
         ...form,
+        recipient_phone: form.recipient_phone?.trim()
+          ? normalizePhone(form.recipient_phone)
+          : form.recipient_phone,
         latitude: coords?.lat ?? null,
         longitude: coords?.lng ?? null,
       };
@@ -365,10 +369,14 @@ export default function Addresses() {
               />
               <InputField
                 label="Recipient phone (optional)"
-                placeholder="+91 98xxxxxxxx"
+                prefix="+91"
+                placeholder="98xxxxxxxx"
                 keyboardType="phone-pad"
+                maxLength={10}
                 value={form.recipient_phone ?? ''}
-                onChangeText={(v) => setForm((f) => ({ ...f, recipient_phone: v }))}
+                onChangeText={(v) =>
+                  setForm((f) => ({ ...f, recipient_phone: v.replace(/[^0-9]/g, '').slice(0, 10) }))
+                }
               />
 
               <TouchableOpacity

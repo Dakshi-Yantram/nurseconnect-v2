@@ -13,7 +13,7 @@
  * fetching credentials and joining audio happens afterwards, only if the user
  * actually answers.
  */
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import { callsService, type CallEndReason, type IncomingCallPayload } from '../services/calls.service';
 import { getCallKeep, getRealtimeKit, callingSupported } from './native-modules';
 
@@ -169,10 +169,53 @@ class CallManager {
     }
   }
 
+  // ---------------------------------------------------------- permissions --
+  /**
+   * The Dyte/WebRTC native layer accesses the mic the moment `init()` runs
+   * (see `joinMeeting`). On some Android OEM builds, calling getUserMedia
+   * without RECORD_AUDIO already granted throws a native SecurityException
+   * that isn't a catchable JS error — it takes the whole app down instead of
+   * surfacing a message. Asking explicitly first, with our own React Native
+   * prompt, avoids ever hitting that path: either the user grants it and we
+   * proceed, or they deny it and we show a normal in-app error.
+   */
+  private async ensureMicPermission(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true; // iOS: CallKit/AVAudioSession handles this.
+    try {
+      const already = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      );
+      if (already) return true;
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: 'Microphone permission',
+          message: 'NurseConnect needs microphone access to make and receive calls.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Deny',
+        },
+      );
+      return result === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (e) {
+      // If the permission API itself is unavailable for some reason, fail
+      // open and let the native SDK's own prompt (if any) take over rather
+      // than blocking calling entirely.
+      console.warn('[calls] mic permission check failed:', (e as Error)?.message);
+      return true;
+    }
+  }
+
   // ------------------------------------------------------------ outgoing --
   async startCall(bookingId: string, peerName: string): Promise<void> {
     if (!callingSupported()) {
       this.set({ error: 'In-app calling needs a development build.', phase: 'idle' });
+      return;
+    }
+    if (!(await this.ensureMicPermission())) {
+      this.set({
+        error: 'Microphone permission is required to make calls. Enable it in Settings.',
+        phase: 'idle',
+      });
       return;
     }
     this.set({
@@ -206,6 +249,10 @@ class CallManager {
     if (!bookingId || !callSessionId) return;
     if (!callingSupported()) {
       this.set({ error: 'In-app calling needs a development build.' });
+      return;
+    }
+    if (!(await this.ensureMicPermission())) {
+      this.set({ error: 'Microphone permission is required to answer calls. Enable it in Settings.' });
       return;
     }
     this.set({ phase: 'connecting', error: null });
