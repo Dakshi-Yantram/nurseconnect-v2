@@ -185,17 +185,41 @@ class CallManager {
       const already = await PermissionsAndroid.check(
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       );
-      if (already) return true;
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      if (!already) {
+        const result = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone permission',
+            message: 'NurseConnect needs microphone access to make and receive calls.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Deny',
+          },
+        );
+        if (result !== PermissionsAndroid.RESULTS.GRANTED) return false;
+      }
+
+      // The native calling SDK's Android foreground service is declared with
+      // a combined camera+microphone type. On Android 14+ the OS checks that
+      // BOTH permissions are already granted before that service is allowed
+      // to start — even for an audio-only call with video off — and throws
+      // an uncatchable native SecurityException (kills the whole app, no JS
+      // error) if CAMERA isn't granted yet. So it must be requested here too,
+      // not only later when the user opts into video.
+      const cameraAlready = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+      );
+      if (cameraAlready) return true;
+      const cameraResult = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.CAMERA,
         {
-          title: 'Microphone permission',
-          message: 'NurseConnect needs microphone access to make and receive calls.',
+          title: 'Camera permission',
+          message:
+            'NurseConnect needs camera access to start calls, even if you keep video off.',
           buttonPositive: 'Allow',
           buttonNegative: 'Deny',
         },
       );
-      return result === PermissionsAndroid.RESULTS.GRANTED;
+      return cameraResult === PermissionsAndroid.RESULTS.GRANTED;
     } catch (e) {
       // If the permission API itself is unavailable for some reason, fail
       // open and let the native SDK's own prompt (if any) take over rather
