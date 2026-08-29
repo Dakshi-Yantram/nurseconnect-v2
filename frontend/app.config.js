@@ -125,12 +125,6 @@ module.exports = () => ({
         },
       ],
       'expo-font',
-      // expo-image-picker's config plugin is what actually injects the
-      // camera/photo-library permission entries (and their usage-description
-      // strings) into the native Android/iOS projects at prebuild time. It
-      // was missing entirely before, which is the root cause of the camera
-      // never opening on device builds — the permission simply didn't exist
-      // natively for the OS to grant, regardless of what the JS side asked.
       [
         'expo-image-picker',
         {
