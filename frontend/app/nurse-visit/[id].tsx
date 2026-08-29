@@ -451,6 +451,21 @@ export default function NurseVisitScreen() {
           <Ionicons name="chevron-forward" size={16} color={Colors.textTertiary} />
         </TouchableOpacity>
 
+        {/* Past visit history for this patient, recorded by any nurse */}
+        {!!booking?.patientId && (
+          <TouchableOpacity
+            style={styles.messageBtn}
+            onPress={() =>
+              router.push({ pathname: '/patient-history/[id]', params: { id: booking.patientId! } })
+            }
+            testID="visit-patient-history"
+          >
+            <Ionicons name="time-outline" size={18} color={Colors.primary} />
+            <Text style={styles.messageTxt}>View patient history</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textTertiary} />
+          </TouchableOpacity>
+        )}
+
         {/* Quick actions */}
         <Text style={styles.sectionLabel}>Clinical actions</Text>
         <View style={styles.actionsGrid}>
