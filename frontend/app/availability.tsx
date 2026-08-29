@@ -25,7 +25,19 @@ import { GradientButton } from '../components/GradientButton';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
-import { workerSelfService } from '../services/worker-self.service';
+import { workerSelfService, type AvailabilitySlot } from '../services/worker-self.service';
+
+const DAYS: { id: number; label: string; short: string }[] = [
+  { id: 0, label: 'Monday', short: 'Mon' },
+  { id: 1, label: 'Tuesday', short: 'Tue' },
+  { id: 2, label: 'Wednesday', short: 'Wed' },
+  { id: 3, label: 'Thursday', short: 'Thu' },
+  { id: 4, label: 'Friday', short: 'Fri' },
+  { id: 5, label: 'Saturday', short: 'Sat' },
+  { id: 6, label: 'Sunday', short: 'Sun' },
+];
+
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const STATES: {
   id: 'online' | 'offline' | 'busy' | 'on_leave';
@@ -79,6 +91,14 @@ export default function Availability() {
   const [radius, setRadius] = useState(12);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
 
+  // ----- Weekly working-hours schedule -----
+  const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
+  const [selectedDays, setSelectedDays] = useState<Set<number>>(new Set());
+  const [slotStart, setSlotStart] = useState('09:00');
+  const [slotEnd, setSlotEnd] = useState('17:00');
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [scheduleLoaded, setScheduleLoaded] = useState(false);
+
   const load = useCallback(async () => {
     try {
       await loadWorkerProfileAPI();
@@ -87,11 +107,75 @@ export default function Availability() {
     } finally {
       setLoading(false);
     }
+    try {
+      const existing = await workerSelfService.availabilitySlots();
+      setSlots(existing);
+    } catch {
+      // Schedule editor still works locally; save will retry the write.
+    } finally {
+      setScheduleLoaded(true);
+    }
   }, [loadWorkerProfileAPI]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const toggleDay = (id: number) => {
+    setSelectedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const addSlot = () => {
+    if (!TIME_RE.test(slotStart) || !TIME_RE.test(slotEnd)) {
+      Alert.alert('Check the time', 'Use 24-hour HH:MM, for example 09:00 and 17:00.');
+      return;
+    }
+    if (slotEnd <= slotStart) {
+      Alert.alert('Check the time', 'End time must be after start time.');
+      return;
+    }
+    if (selectedDays.size === 0) {
+      Alert.alert('Pick a day', 'Select at least one day for this slot.');
+      return;
+    }
+    const additions: AvailabilitySlot[] = Array.from(selectedDays).map((day_of_week) => ({
+      day_of_week,
+      start_time: slotStart,
+      end_time: slotEnd,
+    }));
+    setSlots((prev) => [...prev, ...additions]);
+    setSelectedDays(new Set());
+  };
+
+  const removeSlot = (index: number) => {
+    setSlots((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const saveSchedule = async () => {
+    setSavingSchedule(true);
+    try {
+      const saved = await workerSelfService.saveAvailabilitySlots(slots);
+      setSlots(saved);
+      Alert.alert('Saved', 'Your working hours have been updated.');
+    } catch (e: any) {
+      Alert.alert('Could not save', e?.message || 'Please try again.');
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const slotsByDay = DAYS.map((d) => ({
+    day: d,
+    entries: slots
+      .map((s, index) => ({ ...s, index }))
+      .filter((s) => s.day_of_week === d.id)
+      .sort((a, b) => a.start_time.localeCompare(b.start_time)),
+  }));
 
   // Seed the form from the profile once it arrives, without clobbering edits.
   useEffect(() => {
@@ -210,6 +294,88 @@ export default function Availability() {
             </TouchableOpacity>
           );
         })}
+
+        <Text style={[styles.sectionTitle, { marginTop: Spacing.xl }]}>Working hours</Text>
+        <Text style={styles.sectionNote}>
+          Tell us the days and times you're generally open to working. This is your declared
+          schedule — you can still go Available/Busy/Offline above at any moment.
+        </Text>
+
+        <Text style={styles.fieldLabel}>Days</Text>
+        <View style={styles.chipRow}>
+          {DAYS.map((d) => (
+            <TouchableOpacity
+              key={d.id}
+              style={[styles.chip, selectedDays.has(d.id) && styles.chipActive]}
+              onPress={() => toggleDay(d.id)}
+              testID={`day-${d.id}`}
+            >
+              <Text style={[styles.chipTxt, selectedDays.has(d.id) && { color: '#fff' }]}>
+                {d.short}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.timeRow}>
+          <View style={{ flex: 1 }}>
+            <InputField
+              label="From"
+              placeholder="09:00"
+              value={slotStart}
+              onChangeText={setSlotStart}
+              testID="slot-start"
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <InputField
+              label="To"
+              placeholder="17:00"
+              value={slotEnd}
+              onChangeText={setSlotEnd}
+              testID="slot-end"
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity style={styles.addSlotBtn} onPress={addSlot} testID="add-slot">
+          <Ionicons name="add-circle" size={18} color={Colors.teal} />
+          <Text style={styles.addSlotTxt}>Add this slot to selected days</Text>
+        </TouchableOpacity>
+
+        {scheduleLoaded && slots.length === 0 && (
+          <Text style={styles.emptyScheduleTxt}>
+            No working hours set yet — pick days and a time above, then add.
+          </Text>
+        )}
+
+        {slotsByDay
+          .filter((g) => g.entries.length > 0)
+          .map((g) => (
+            <View key={g.day.id} style={styles.dayGroup}>
+              <Text style={styles.dayGroupLabel}>{g.day.label}</Text>
+              <View style={styles.chipRow}>
+                {g.entries.map((s) => (
+                  <View key={`${s.index}`} style={styles.slotPill} testID={`slot-${s.index}`}>
+                    <Text style={styles.slotPillTxt}>
+                      {s.start_time}–{s.end_time}
+                    </Text>
+                    <TouchableOpacity onPress={() => removeSlot(s.index)} testID={`remove-slot-${s.index}`}>
+                      <Ionicons name="close-circle" size={16} color={Colors.textTertiary} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ))}
+
+        <GradientButton
+          title="Save working hours"
+          onPress={saveSchedule}
+          loading={savingSchedule}
+          style={{ marginTop: Spacing.md }}
+          testID="save-schedule"
+        />
 
         <Text style={[styles.sectionTitle, { marginTop: Spacing.xl }]}>Where you work</Text>
         <Text style={styles.sectionNote}>
@@ -350,4 +516,38 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
   warnTxt: { ...Typography.small, color: Colors.warning, flex: 1, lineHeight: 17 },
+  timeRow: { flexDirection: 'row', gap: Spacing.sm },
+  addSlotBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: Spacing.md,
+  },
+  addSlotTxt: { ...Typography.small, color: Colors.teal, fontWeight: '600' as const },
+  emptyScheduleTxt: {
+    ...Typography.small,
+    color: Colors.textTertiary,
+    marginBottom: Spacing.md,
+    fontStyle: 'italic' as const,
+  },
+  dayGroup: { marginBottom: Spacing.sm },
+  dayGroupLabel: {
+    ...Typography.caption,
+    color: Colors.textSecondary,
+    fontWeight: '700' as const,
+    marginBottom: 6,
+  },
+  slotPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  slotPillTxt: { ...Typography.small, color: Colors.textPrimary, fontWeight: '600' as const },
 });

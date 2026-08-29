@@ -24,6 +24,7 @@ import { Header } from '../../components/Header';
 import { OfflineBanner } from '../../components/OfflineBanner';
 import { AsyncBoundary } from '../../components/AsyncBoundary';
 import { BookingStatusBadge } from '../../components/BookingStatusBadge';
+import { AlertnessCheckModal } from '../../components/AlertnessCheckModal';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
 import { canNurseCancel, CANCELLATION_CLOSED_MESSAGE } from '../../lib/booking-domain';
@@ -56,6 +57,8 @@ export default function Assignments() {
   );
   const [refreshing, setRefreshing] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Booking pending an alertness check before Maps opens for it (null = modal hidden).
+  const [pendingNavBooking, setPendingNavBooking] = useState<Booking | null>(null);
 
   const assignments = useStore((s) => s.assignments);
   const newRequests = useStore((s) => s.newRequests);
@@ -241,11 +244,23 @@ export default function Assignments() {
               }
               onAccept={() => accept(item)}
               onCancel={() => cancel(item)}
-              onNavigate={() => openInMaps(item.latitude, item.longitude)}
+              onNavigate={() => setPendingNavBooking(item)}
             />
           )}
         />
       </AsyncBoundary>
+
+      <AlertnessCheckModal
+        visible={!!pendingNavBooking}
+        bookingId={pendingNavBooking?.id}
+        onClose={() => setPendingNavBooking(null)}
+        onContinue={() => {
+          if (pendingNavBooking) {
+            openInMaps(pendingNavBooking.latitude, pendingNavBooking.longitude);
+          }
+          setPendingNavBooking(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
