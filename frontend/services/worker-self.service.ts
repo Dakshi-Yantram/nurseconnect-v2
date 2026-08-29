@@ -132,6 +132,57 @@ export interface ServiceEligibilityItem {
   requires_admin_skill_approval: boolean;
 }
 
+/** 0=Monday .. 6=Sunday. `start_time`/`end_time` are "HH:MM" 24h strings. */
+export interface AvailabilitySlot {
+  id?: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  is_active?: boolean;
+}
+
+export interface AlertnessCheckResult {
+  id: string;
+  booking_id: string | null;
+  round_reaction_times_ms: number[] | null;
+  average_reaction_time_ms: number | null;
+  missed_taps: number;
+  passed: boolean;
+  created_at: string;
+}
+
+export interface PatientVisitHistoryItem {
+  booking_id: string;
+  visit_id: string;
+  scheduled_date: string;
+  status: string;
+  worker_id: string;
+  worker_name: string | null;
+  care_notes: string | null;
+  family_summary: string | null;
+  checklist_responses: Record<string, any> | null;
+  vitals:
+    | { recorded_at: string; bp: string | null; pulse: number | null; spo2: number | null; temperature_f: number | null }[]
+    | null;
+  check_in_at: string | null;
+  check_out_at: string | null;
+}
+
+export interface PatientHistoryResponse {
+  patient: {
+    id: string;
+    full_name: string;
+    date_of_birth: string | null;
+    gender: string | null;
+    blood_group: string | null;
+    medical_conditions: string[] | null;
+    allergies: string[] | null;
+    current_medications: Record<string, any>[] | null;
+    notes: string | null;
+  };
+  visits: PatientVisitHistoryItem[];
+}
+
 export const workerSelfService = {
   me: () => api.get<WorkerMeOut>('/workers/me'),
   updateMe: (patch: Partial<WorkerMeOut>) => api.put<WorkerMeOut>('/workers/me', patch),
@@ -217,4 +268,23 @@ export const workerSelfService = {
       current_location_updated_at: string;
       current_location_accuracy: number | null;
     }>('/workers/me/location', loc),
+
+  // ----- Weekly working-hours schedule (which slots she's open to work) -----
+  availabilitySlots: () => api.get<AvailabilitySlot[]>('/workers/me/availability-slots'),
+  /** Replaces the whole weekly schedule. Send `[]` to clear it. */
+  saveAvailabilitySlots: (slots: AvailabilitySlot[]) =>
+    api.put<AvailabilitySlot[]>('/workers/me/availability-slots', { slots }),
+
+  // ----- Pre-navigation alertness / fatigue check -----
+  submitAlertnessCheck: (payload: {
+    booking_id?: string;
+    round_reaction_times_ms: number[];
+    missed_taps: number;
+  }) => api.post<AlertnessCheckResult>('/workers/me/alertness-checks', payload),
+  latestAlertnessCheck: () =>
+    api.get<AlertnessCheckResult | null>('/workers/me/alertness-checks/latest'),
+
+  // ----- Patient care history (past visits by any nurse for this patient) -----
+  patientHistory: (patientId: string) =>
+    api.get<PatientHistoryResponse>(`/workers/patients/${patientId}/history`),
 };
