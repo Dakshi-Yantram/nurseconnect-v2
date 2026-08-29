@@ -49,7 +49,7 @@ module.exports = () => ({
     icon: './assets/images/icon.png',
     scheme: 'nurseconnect',
     userInterfaceStyle: 'automatic',
-    newArchEnabled: true,
+    newArchEnabled: false,
 
     ios: {
       supportsTablet: true,
@@ -125,12 +125,6 @@ module.exports = () => ({
         },
       ],
       'expo-font',
-      // expo-image-picker's config plugin is what actually injects the
-      // camera/photo-library permission entries (and their usage-description
-      // strings) into the native Android/iOS projects at prebuild time. It
-      // was missing entirely before, which is the root cause of the camera
-      // never opening on device builds — the permission simply didn't exist
-      // natively for the OS to grant, regardless of what the JS side asked.
       [
         'expo-image-picker',
         {
@@ -158,11 +152,11 @@ module.exports = () => ({
     ],
 
     experiments: { typedRoutes: true },
-    owner: 'yantrammedtechs-team',
+    owner: 'dakshi123',
 
     extra: {
       router: {},
-      eas: { projectId: '8853574c-958c-4f28-aafb-73328067d937' },
+      eas: { projectId: 'da0cbe47-ab8e-43f9-966f-d4b83bb90e3b' },
       firebaseConfigured: firebaseReady,
     },
   },
