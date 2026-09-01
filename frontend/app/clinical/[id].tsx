@@ -221,24 +221,6 @@ export default function ClinicalDocumentation() {
     return false;
   };
 
-  const ensureLibraryPermission = async (): Promise<boolean> => {
-    const current = await ImagePicker.getMediaLibraryPermissionsAsync();
-    if (current.granted || (current as any).accessPrivileges === 'limited') return true;
-    if (current.canAskAgain) {
-      const requested = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (requested.granted || (requested as any).accessPrivileges === 'limited') return true;
-    }
-    Alert.alert(
-      'Photo library access needed',
-      'NurseConnect needs photo library access to attach clinical photos. Please enable it in Settings.',
-      [
-        { text: 'Not now', style: 'cancel' },
-        { text: 'Open Settings', onPress: openAppSettings },
-      ],
-    );
-    return false;
-  };
-
   const uploadAsset = async (
     fieldId: string,
     kind: PhotoFieldKind,
@@ -308,8 +290,6 @@ export default function ClinicalDocumentation() {
   };
 
   const pickFromLibrary = async (fieldId: string, kind: PhotoFieldKind) => {
-    const ok = await ensureLibraryPermission();
-    if (!ok) return;
     try {
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,

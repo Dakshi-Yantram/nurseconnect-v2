@@ -103,7 +103,6 @@ module.exports = () => ({
         // open, even if the user taps "Allow" — the OS never shows a
         // prompt because the app never declared the permission.
         'android.permission.CAMERA',
-        'android.permission.READ_MEDIA_IMAGES',
       ],
     },
 
