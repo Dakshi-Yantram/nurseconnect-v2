@@ -109,15 +109,6 @@ export default function Documents() {
       return;
     }
 
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert(
-        'Photo access needed',
-        'Allow photo access so you can attach a picture or scan of your document.',
-      );
-      return;
-    }
-
     const picked = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.7,
