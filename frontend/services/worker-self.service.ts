@@ -148,6 +148,12 @@ export interface AlertnessCheckResult {
   average_reaction_time_ms: number | null;
   missed_taps: number;
   passed: boolean;
+  false_starts_count: number;
+  lapses_count: number;
+  tier: 'pass' | 'warning' | 'fail';
+  declaration_confirmed: boolean;
+  retry_allowed: boolean;
+  message: string | null;
   created_at: string;
 }
 
@@ -275,14 +281,21 @@ export const workerSelfService = {
   saveAvailabilitySlots: (slots: AvailabilitySlot[]) =>
     api.put<AvailabilitySlot[]>('/workers/me/availability-slots', { slots }),
 
-  // ----- Pre-navigation alertness / fatigue check -----
+  // ----- Pre-visit safety check: reaction test + fitness declaration -----
+  // Shown on one combined screen right when the nurse taps "En Route".
   submitAlertnessCheck: (payload: {
     booking_id?: string;
     round_reaction_times_ms: number[];
-    missed_taps: number;
+    missed_taps?: number;
+    false_starts?: number;
+    declaration_confirmed?: boolean;
   }) => api.post<AlertnessCheckResult>('/workers/me/alertness-checks', payload),
-  latestAlertnessCheck: () =>
-    api.get<AlertnessCheckResult | null>('/workers/me/alertness-checks/latest'),
+  latestAlertnessCheck: (bookingId?: string) =>
+    api.get<AlertnessCheckResult | null>(
+      bookingId
+        ? `/workers/me/alertness-checks/latest?booking_id=${bookingId}`
+        : '/workers/me/alertness-checks/latest',
+    ),
 
   // ----- Patient care history (past visits by any nurse for this patient) -----
   patientHistory: (patientId: string) =>

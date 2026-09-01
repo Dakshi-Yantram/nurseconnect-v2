@@ -66,6 +66,14 @@ export const bookingsService = {
    */
   cancel: (id: string, reason: string) =>
     api.post<BackendBooking>(`/bookings/${id}/cancel`, { reason }),
+  /**
+   * Marks the nurse en route to the patient's address. Gated server-side on
+   * a passing, declaration-confirmed Nurse Safety Check for this booking
+   * (see NurseSafetyCheckModal) — expect a 403 with code
+   * SAFETY_CHECK_REQUIRED / SAFETY_CHECK_WARNING / SAFETY_CHECK_FAILED if
+   * that gate hasn't been cleared yet.
+   */
+  markEnRoute: (id: string) => api.post<BackendBooking>(`/bookings/${id}/en-route`),
   escalate: (id: string, payload: BookingEscalatePayload) =>
     api.post<{ id: string; level: string; status: string; sla_breach_at: string | null }>(
       `/bookings/${id}/escalate`,
