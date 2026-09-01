@@ -24,7 +24,7 @@ import { Header } from '../../components/Header';
 import { OfflineBanner } from '../../components/OfflineBanner';
 import { AsyncBoundary } from '../../components/AsyncBoundary';
 import { BookingStatusBadge } from '../../components/BookingStatusBadge';
-import { AlertnessCheckModal } from '../../components/AlertnessCheckModal';
+import { NurseSafetyCheckModal } from '../../components/NurseSafetyCheckModal';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
 import { canNurseCancel, CANCELLATION_CLOSED_MESSAGE } from '../../lib/booking-domain';
@@ -250,15 +250,19 @@ export default function Assignments() {
         />
       </AsyncBoundary>
 
-      <AlertnessCheckModal
+      <NurseSafetyCheckModal
         visible={!!pendingNavBooking}
-        bookingId={pendingNavBooking?.id}
-        onClose={() => setPendingNavBooking(null)}
-        onContinue={() => {
+        bookingId={pendingNavBooking?.id ?? ''}
+        onClose={() => {
+          setPendingNavBooking(null);
+          refreshAssignmentsAPI().catch(() => {});
+        }}
+        onEnRouteConfirmed={() => {
           if (pendingNavBooking) {
             openInMaps(pendingNavBooking.latitude, pendingNavBooking.longitude);
           }
           setPendingNavBooking(null);
+          refreshAssignmentsAPI().catch(() => {});
         }}
       />
     </SafeAreaView>
