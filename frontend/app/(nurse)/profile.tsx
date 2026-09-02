@@ -92,6 +92,12 @@ export default function NurseProfileScreen() {
       onPress: () => router.push('/documents'),
     },
     {
+      icon: 'file-sign' as const,
+      title: 'Partner Agreement',
+      sub: 'Onboarding & contractor terms',
+      onPress: () => router.push('/(nurse)/contract'),
+    },
+    {
       icon: 'medical-bag' as const,
       title: 'Kit checklist',
       sub: 'Daily preparation',
