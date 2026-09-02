@@ -16,4 +16,5 @@ export { addressesService, formatAddress } from './addresses.service';
 export { messagingService } from './messaging.service';
 export { supportService, TICKET_CATEGORIES } from './support.service';
 export { consentsService, CONSENT_LABELS } from './consents.service';
+export { contractsService } from './contracts.service';
 export * from './mappers';
