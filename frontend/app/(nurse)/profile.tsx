@@ -46,6 +46,7 @@ export default function NurseProfileScreen() {
   const approved = onboarding?.onboarding_status === 'approved';
   const rating = Number(workerProfile?.rating_average ?? 0);
   const ratingCount = workerProfile?.rating_count ?? 0;
+  const isDoctor = workerProfile?.worker_type === 'doctor';
 
   const items = [
     {
@@ -61,6 +62,24 @@ export default function NurseProfileScreen() {
       sub: 'Payouts and history',
       onPress: () => router.push('/earnings'),
     },
+    // Doctor-only: teleconsult queue + e-prescription signature. Hidden for
+    // every other provider type (nurse/dentist/physio/caregiver/mother-baby).
+    ...(isDoctor
+      ? [
+          {
+            icon: 'stethoscope' as const,
+            title: 'Teleconsult queue',
+            sub: 'Waiting, diet, patient issues, prescription',
+            onPress: () => router.push('/(nurse)/teleconsult-queue'),
+          },
+          {
+            icon: 'draw-pen' as const,
+            title: 'E-Prescription signature',
+            sub: 'Stamped on every prescription you issue',
+            onPress: () => router.push('/(nurse)/eprescription-signature'),
+          },
+        ]
+      : []),
     {
       icon: 'clipboard-check-outline' as const,
       title: 'My services',
