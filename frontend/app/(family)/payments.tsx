@@ -14,6 +14,9 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
+  Alert,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -25,7 +28,7 @@ import { AsyncBoundary } from '../../components/AsyncBoundary';
 import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
 import { formatDay, inr } from '../../lib/format';
-import type { PaymentHistoryItem } from '../../services/payments.service';
+import { paymentsService, type PaymentHistoryItem } from '../../services/payments.service';
 
 const STATUS_TONE: Record<string, { bg: string; fg: string; label: string; icon: any }> = {
   captured: { bg: Colors.successBg, fg: Colors.success, label: 'Paid', icon: 'checkmark-circle' },
@@ -140,11 +143,66 @@ export default function PaymentsScreen() {
   );
 }
 
+/**
+ * Fetches the booking's tax invoice on demand and opens the PDF.
+ *
+ * The PDF URL isn't known until the invoice is fetched, so this is a button
+ * rather than a plain link — mirrors InvoiceButton on the web admin app.
+ * GET /payments/bookings/{id}/invoice returns the customer view only (no
+ * internal 80/20 split) and generates the invoice on the spot if a transient
+ * failure meant it was never created at payment time.
+ */
+function InvoiceDownload({ bookingId }: { bookingId: string }) {
+  const [loading, setLoading] = useState(false);
+
+  const open = async () => {
+    setLoading(true);
+    try {
+      const invoice = await paymentsService.invoice(bookingId);
+      if (invoice.pdf_url) {
+        await Linking.openURL(invoice.pdf_url);
+      } else {
+        Alert.alert('Not ready yet', 'Your receipt is still being prepared. Please try again shortly.');
+      }
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      Alert.alert(
+        'Could not load receipt',
+        msg.includes('payment is completed')
+          ? 'The receipt becomes available once payment is completed.'
+          : msg,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <TouchableOpacity
+      onPress={open}
+      disabled={loading}
+      style={styles.invoiceBtn}
+      testID={`invoice-${bookingId}`}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color={Colors.primary} />
+      ) : (
+        <>
+          <Ionicons name="document-text-outline" size={13} color={Colors.primary} />
+          <Text style={styles.invoiceBtnTxt}>Receipt</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 const PaymentRow: React.FC<{ payment: PaymentHistoryItem; onPress: () => void }> = ({
   payment,
   onPress,
 }) => {
   const tone = STATUS_TONE[payment.payment_status] ?? STATUS_TONE.pending;
+  const hasInvoice = payment.payment_status === 'captured' || payment.payment_status === 'refunded'
+    || payment.payment_status === 'partially_refunded';
   return (
     <TouchableOpacity
       style={styles.row}
@@ -161,6 +219,9 @@ const PaymentRow: React.FC<{ payment: PaymentHistoryItem; onPress: () => void }>
       <View style={{ alignItems: 'flex-end' }}>
         <Text style={styles.amount}>{inr(payment.total_amount)}</Text>
         <Text style={[styles.status, { color: tone.fg }]}>{tone.label}</Text>
+        {/* Nested TouchableOpacity: RN gives it the responder, so tapping
+            "Receipt" does not also trigger the row's onPress. */}
+        {hasInvoice && <InvoiceDownload bookingId={payment.booking_id} />}
       </View>
     </TouchableOpacity>
   );
@@ -195,4 +256,6 @@ const styles = StyleSheet.create({
   date: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
   amount: { ...Typography.bodyBold, color: Colors.textPrimary },
   status: { ...Typography.caption, fontWeight: '700' as const, marginTop: 2 },
+  invoiceBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 6 },
+  invoiceBtnTxt: { ...Typography.caption, color: Colors.primary, fontWeight: '700' as const },
 });

@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,11 +8,51 @@ import { OfflineBanner } from '../components/OfflineBanner';
 import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
 import { formatDay, humanize, inr } from '../lib/format';
+import { paymentsService, type PayoutStatement } from '../services/payments.service';
+
+/**
+ * "Payout Advice & Tax Invoice" access, per released payment.
+ *
+ * Loaded independently of the earnings summary above: a failure here must
+ * not blank out the payout totals, which are the primary content of this
+ * screen. `payout_status` reflects what Razorpay has actually confirmed —
+ * an in-flight transfer never renders a UTR or reads as settled.
+ */
+function usePayoutStatements() {
+  const [statements, setStatements] = useState<PayoutStatement[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    paymentsService
+      .payoutStatements()
+      .then(setStatements)
+      .catch(() => setStatements([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  return { statements, loading, reload };
+}
+
+function openPdf(url: string | null) {
+  if (!url) {
+    Alert.alert('Not ready yet', 'The statement PDF is still being prepared. Please check back shortly.');
+    return;
+  }
+  Linking.openURL(url).catch(() =>
+    Alert.alert('Could not open', 'The statement link appears to be invalid.'),
+  );
+}
 
 export default function Earnings() {
   const assignments = useStore((s) => s.assignments);
   const earnings = useStore((s) => s.earnings);
   const loadEarningsAPI = useStore((s) => s.loadEarningsAPI);
+  const { statements, loading: statementsLoading } = usePayoutStatements();
 
   useEffect(() => {
     loadEarningsAPI().catch(() => {});
@@ -92,6 +132,81 @@ export default function Earnings() {
           </View>
         )}
 
+        <Text style={styles.section}>Payout statements</Text>
+        <Text style={styles.sectionNote}>
+          The full tax invoice for each payout — gross earned, the platform fee billed back to
+          you, GST, and the final amount transferred to your bank account.
+        </Text>
+        {statements.length > 0 ? (
+          statements.map((st) => (
+            <TouchableOpacity
+              key={st.statement_number}
+              style={styles.row}
+              onPress={() => openPdf(st.pdf_url)}
+              testID={`payout-statement-${st.statement_number}`}
+            >
+              <View style={styles.icon}>
+                <Ionicons name="document-text" size={18} color={Colors.success} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.rowTitle}>
+                  {st.booking_ref} · {inr(st.final_disbursal)}
+                </Text>
+                <Text style={styles.rowSub}>
+                  Earned {inr(st.gross_earned)} · fee {inr(st.platform_fee + st.platform_fee_gst)}
+                  {st.total_deductions > 0 ? ` · deductions ${inr(st.total_deductions)}` : ''}
+                </Text>
+                {st.utr ? (
+                  <Text style={styles.rowMono}>UTR {st.utr}</Text>
+                ) : st.payout_status !== 'paid' ? (
+                  <Text style={styles.rowPending}>Awaiting bank confirmation</Text>
+                ) : null}
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <View
+                  style={[
+                    styles.statusPill,
+                    st.payout_status === 'paid'
+                      ? { backgroundColor: Colors.successBg }
+                      : st.payout_status === 'failed'
+                        ? { backgroundColor: Colors.errorBg }
+                        : { backgroundColor: Colors.warningBg },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusPillTxt,
+                      {
+                        color:
+                          st.payout_status === 'paid'
+                            ? Colors.success
+                            : st.payout_status === 'failed'
+                              ? Colors.danger
+                              : Colors.warning,
+                      },
+                    ]}
+                  >
+                    {st.payout_status === 'processing' ? 'in transit' : st.payout_status}
+                  </Text>
+                </View>
+                {st.pdf_url && <Ionicons name="open-outline" size={14} color={Colors.textTertiary} style={{ marginTop: 6 }} />}
+              </View>
+            </TouchableOpacity>
+          ))
+        ) : (
+          <View style={styles.row}>
+            <View style={styles.icon}>
+              <Ionicons name="document-text" size={18} color={Colors.success} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.rowTitle}>
+                {statementsLoading ? 'Loading…' : 'No statements yet'}
+              </Text>
+              <Text style={styles.rowSub}>Your payout advice appears here once a payment is released</Text>
+            </View>
+          </View>
+        )}
+
         <Text style={styles.section}>Completed visits</Text>
         <Text style={styles.sectionNote}>
           Your payout per visit is the visit value less platform commission and TDS — see the
@@ -134,4 +249,8 @@ const styles = StyleSheet.create({
   rowSub: { ...Typography.small, color: Colors.textSecondary, marginTop: 2 },
   amt: { ...Typography.bodyBold, color: Colors.success, fontWeight: '800' as const },
   date: { ...Typography.caption, color: Colors.textTertiary, marginTop: 2 },
+  rowMono: { ...Typography.caption, color: Colors.textTertiary, marginTop: 2, fontFamily: 'monospace' },
+  rowPending: { ...Typography.caption, color: Colors.warning, marginTop: 2 },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
+  statusPillTxt: { ...Typography.caption, fontWeight: '700' as const, textTransform: 'uppercase' as const, fontSize: 9 },
 });
