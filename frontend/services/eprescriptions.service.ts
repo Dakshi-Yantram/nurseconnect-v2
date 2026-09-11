@@ -50,21 +50,19 @@ export interface EPrescriptionCreatePayload {
 }
 
 export const eprescriptionsService = {
-  getSignature: () => api.get<SignatureStatus>('/eprescriptions/signature').then((r) => r.data),
+  getSignature: () => api.get<SignatureStatus>('/eprescriptions/signature'),
 
   /** `imageBase64` may be a raw base64 string or a `data:image/png;base64,...` URI — the backend accepts both. */
   uploadSignature: (imageBase64: string) =>
-    api
-      .post<{ signature_url: string; uploaded_at: string }>('/eprescriptions/signature', {
-        image_base64: imageBase64,
-      })
-      .then((r) => r.data),
+    api.post<{ signature_url: string; uploaded_at: string }>('/eprescriptions/signature', {
+      image_base64: imageBase64,
+    }),
 
   create: (payload: EPrescriptionCreatePayload) =>
-    api.post<EPrescriptionOut>('/eprescriptions', payload).then((r) => r.data),
+    api.post<EPrescriptionOut>('/eprescriptions', payload),
 
-  get: (id: string) => api.get<EPrescriptionOut>(`/eprescriptions/${id}`).then((r) => r.data),
+  get: (id: string) => api.get<EPrescriptionOut>(`/eprescriptions/${id}`),
 
   listForBooking: (bookingId: string) =>
-    api.get<EPrescriptionOut[]>(`/eprescriptions/booking/${bookingId}`).then((r) => r.data),
+    api.get<EPrescriptionOut[]>(`/eprescriptions/booking/${bookingId}`),
 };
