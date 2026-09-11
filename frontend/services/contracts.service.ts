@@ -31,22 +31,20 @@ export interface OcrSuggestion {
 }
 
 export const contractsService = {
-  getMyContracts: () => api.get<ContractPreview[]>('/contracts/me').then((r) => r.data),
+  getMyContracts: () => api.get<ContractPreview[]>('/contracts/me'),
 
   sendStage1Otp: () =>
-    api.post<{ sent: boolean; dev_otp: string | null }>('/contracts/me/stage1/send-otp').then((r) => r.data),
+    api.post<{ sent: boolean; dev_otp: string | null }>('/contracts/me/stage1/send-otp'),
 
   acceptStage1: (otpCode: string) =>
-    api.post<ContractPreview>('/contracts/me/stage1/accept', { otp_code: otpCode }).then((r) => r.data),
+    api.post<ContractPreview>('/contracts/me/stage1/accept', { otp_code: otpCode }),
 
   acceptStage2: (payload: { esign_reference_id: string; esign_document_url?: string; esign_provider?: string; address?: string }) =>
-    api.post<ContractPreview>('/contracts/me/stage2/accept', payload).then((r) => r.data),
+    api.post<ContractPreview>('/contracts/me/stage2/accept', payload),
 
   applyOcrSuggestion: (documentId: string, applyName: boolean, applyRegistrationNo: boolean) =>
-    api
-      .post<{ applied: Record<string, string> }>(`/contracts/me/documents/${documentId}/apply-ocr`, {
-        apply_name: applyName,
-        apply_registration_no: applyRegistrationNo,
-      })
-      .then((r) => r.data),
+    api.post<{ applied: Record<string, string> }>(`/contracts/me/documents/${documentId}/apply-ocr`, {
+      apply_name: applyName,
+      apply_registration_no: applyRegistrationNo,
+    }),
 };
