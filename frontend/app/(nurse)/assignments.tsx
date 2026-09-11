@@ -278,6 +278,7 @@ const VisitRow: React.FC<{
   onCancel: () => void;
   onNavigate: () => void;
 }> = ({ booking, mode, busy, onOpen, onAccept, onCancel, onNavigate }) => {
+  const router = useRouter();
   const cancellable = mode === 'upcoming' && canNurseCancel(booking);
 
   return (
@@ -345,7 +346,20 @@ const VisitRow: React.FC<{
 
       <View style={styles.footer}>
         <View>
-          <Text style={styles.payLabel}>Visit value</Text>
+          {/*
+            booking.netCost is total_amount - subsidy_amount — the amount
+            the PATIENT pays (same field app/payment.tsx and the family
+            dashboard show as "Pay ₹X" / total spent). It is not the
+            nurse's payout: this booking list has no per-visit payout
+            field from the backend today, so it's labelled as the
+            booking's value rather than implying it's what the nurse
+            earns. The nurse's actual per-visit payout, status
+            (pending/processing/paid/failed), and downloadable payout
+            statement/invoice live on the Earnings screen
+            (Profile > Earnings -> app/earnings.tsx), backed by
+            GET /payments/worker/payout-statements.
+          */}
+          <Text style={styles.payLabel}>Booking value</Text>
           <Text style={styles.pay}>{inr(booking.netCost)}</Text>
         </View>
 
@@ -386,6 +400,18 @@ const VisitRow: React.FC<{
         <Text style={styles.lockedTxt}>
           Cancellation window has closed — contact support if you can’t attend.
         </Text>
+      )}
+
+      {mode === 'past' && booking.rawStatus === 'completed' && (
+        <TouchableOpacity
+          onPress={(e) => {
+            e.stopPropagation();
+            router.push('/earnings');
+          }}
+          testID={`see-payout-${booking.id}`}
+        >
+          <Text style={styles.payoutLink}>See your payout for this visit in Earnings →</Text>
+        </TouchableOpacity>
       )}
     </TouchableOpacity>
   );
@@ -497,4 +523,5 @@ const styles = StyleSheet.create({
   },
   primaryTxt: { ...Typography.small, color: '#fff', fontWeight: '700' as const },
   lockedTxt: { ...Typography.caption, color: Colors.textTertiary, marginTop: 10, lineHeight: 16 },
+  payoutLink: { ...Typography.caption, color: Colors.primary, marginTop: 10, fontWeight: '600' as const },
 });
