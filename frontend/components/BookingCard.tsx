@@ -86,7 +86,13 @@ export const BookingCard: React.FC<Props> = ({
 
       <View style={styles.footerRow}>
         <View>
-          <Text style={styles.costLabel}>{booking.paid ? 'Paid' : 'Amount due'}</Text>
+          <Text style={styles.costLabel}>
+            {booking.paid
+              ? 'Paid'
+              : booking.paymentStatus === 'cash_due'
+                ? 'Due at visit'
+                : 'Amount due'}
+          </Text>
           <Text style={styles.cost}>{inr(booking.netCost)}</Text>
         </View>
         {showActions ? (

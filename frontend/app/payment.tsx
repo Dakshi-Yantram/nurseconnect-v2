@@ -21,6 +21,7 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -38,6 +39,8 @@ import { bookingsService } from '../services/bookings.service';
 import {
   isMockOrder,
   type BackendPaymentOrder,
+  type PaymentMethodId,
+  type PaymentMethodOption,
 } from '../services/payments.service';
 import { mapBooking } from '../services/mappers';
 import { formatDay, formatTime, humanize, inr } from '../lib/format';
@@ -52,12 +55,29 @@ export default function Payment() {
   const services = useStore((s) => s.services);
   const initiatePayment = useStore((s) => s.initiatePaymentAPI);
   const verifyPayment = useStore((s) => s.verifyPaymentAPI);
+  const reconcilePayment = useStore((s) => s.reconcilePaymentAPI);
+  const fetchPaymentMethods = useStore((s) => s.paymentMethodsAPI);
+  const selectCashPayment = useStore((s) => s.selectCashPaymentAPI);
 
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [order, setOrder] = useState<BackendPaymentOrder | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  // Payment methods are server-driven. The fallback below is only used if
+  // the methods call fails, so an offline blip still lets the customer pay
+  // online rather than blocking checkout entirely.
+  const [methods, setMethods] = useState<PaymentMethodOption[]>([
+    {
+      method: 'razorpay',
+      label: 'Pay online',
+      description: 'UPI, card, net banking or wallet.',
+      available: true,
+      reason: null,
+    },
+  ]);
+  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodId>('razorpay');
 
   // Synchronous re-entry guard. `processing` alone is not enough: React state
   // updates are async, so rapid taps (or a duplicate gateway callback) could
@@ -107,6 +127,18 @@ export default function Payment() {
             },
           ]);
         }
+        // Which methods this booking may use. Best-effort: on failure we
+        // keep the online-only fallback rather than blocking checkout.
+        try {
+          const res = await fetchPaymentMethods(bookingId);
+          if (!cancelled && res?.methods?.length) {
+            setMethods(res.methods);
+            const firstAvailable = res.methods.find((m) => m.available);
+            if (firstAvailable) setSelectedMethod(firstAvailable.method);
+          }
+        } catch {
+          // keep fallback
+        }
       } catch (e: any) {
         if (!cancelled) Alert.alert('Could not load booking', e?.message || 'Please try again.');
       } finally {
@@ -116,7 +148,7 @@ export default function Payment() {
     return () => {
       cancelled = true;
     };
-  }, [bookingId, resolveTitle, router]);
+  }, [bookingId, resolveTitle, router, fetchPaymentMethods]);
 
   const finish = useCallback(
     async (payload: {
@@ -128,15 +160,29 @@ export default function Payment() {
       const res = await verifyPayment({ booking_id: booking.id, ...payload });
       if (res.verified) {
         router.replace({ pathname: '/payment-success', params: { id: booking.id } });
-      } else {
-        payInFlight.current = false;
-        Alert.alert(
-          'Payment not confirmed',
-          'We couldn’t confirm your payment. If money was deducted it will be refunded automatically — please contact support.',
-        );
+        return;
       }
+
+      // /verify returned cleanly but says not verified. Before telling the
+      // customer their payment failed, check Razorpay's own record — the
+      // signature path can miss a payment that was in fact captured.
+      try {
+        const state = await reconcilePayment(booking.id);
+        if (state.verified) {
+          router.replace({ pathname: '/payment-success', params: { id: booking.id } });
+          return;
+        }
+      } catch {
+        // fall through
+      }
+
+      payInFlight.current = false;
+      Alert.alert(
+        'Payment not confirmed',
+        'We couldn’t confirm your payment. If money was deducted it will be refunded automatically — please contact support.',
+      );
     },
-    [booking, verifyPayment, router],
+    [booking, verifyPayment, reconcilePayment, router],
   );
 
   const pay = async () => {
@@ -171,14 +217,65 @@ export default function Payment() {
     }
   };
 
+  /**
+   * Cash path. Deliberately separate from `pay`: no order is created, no
+   * gateway opens, and no signature is verified — the booking is simply
+   * confirmed with the money due at the visit. Sharing a handler with the
+   * online flow would mean threading `if cash` through every step of it.
+   */
+  const payWithCash = async () => {
+    if (!booking || payInFlight.current) return;
+    payInFlight.current = true;
+    setProcessing(true);
+    try {
+      await selectCashPayment(booking.id);
+      router.replace({
+        pathname: '/payment-success',
+        params: { id: booking.id, method: 'cash' },
+      });
+    } catch (e: any) {
+      payInFlight.current = false;
+      Alert.alert(
+        'Could not confirm your booking',
+        e?.message || 'Please try again, or choose to pay online instead.',
+      );
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const onCheckoutSuccess = async (result: RazorpaySuccess) => {
     setCheckoutOpen(false);
     setProcessing(true);
     try {
       await finish(result);
     } catch (e: any) {
+      // Razorpay told us the payment succeeded, but our own /verify call
+      // did not complete. The customer has very likely been charged, so
+      // showing them a bare failure here is wrong — that is exactly the
+      // "amount deducted but Verification failed (500)" report.
+      //
+      // Ask the backend to settle the booking against Razorpay's own record
+      // of the order before we say anything. This does NOT force success on
+      // the client: the backend confirms with Razorpay and only then marks
+      // the booking paid.
+      try {
+        const state = await reconcilePayment(booking!.id);
+        if (state.verified) {
+          router.replace({ pathname: '/payment-success', params: { id: booking!.id } });
+          return;
+        }
+      } catch {
+        // Reconciliation itself failed — fall through to the message below.
+      }
+
       payInFlight.current = false;
-      Alert.alert('Verification failed', e?.message || 'Please contact support.');
+      Alert.alert(
+        'We could not confirm your payment',
+        'If money was deducted it is safe — your booking will update automatically, ' +
+          'and any uncollected amount is refunded by your bank. Pull to refresh on ' +
+          'My visits in a few minutes, or contact support with your reference number.',
+      );
     } finally {
       setProcessing(false);
     }
@@ -281,19 +378,58 @@ export default function Payment() {
           </Text>
         </View>
 
+        {/* Payment method. Options come from the backend
+            (/payments/methods/{id}) rather than being hardcoded here, so
+            availability rules live in one place. */}
+        <View style={styles.methodBox}>
+          <Text style={styles.methodHeading}>How would you like to pay?</Text>
+          {methods.map((m) => {
+            const selected = m.method === selectedMethod;
+            return (
+              <TouchableOpacity
+                key={m.method}
+                disabled={!m.available}
+                onPress={() => setSelectedMethod(m.method)}
+                style={[
+                  styles.methodRow,
+                  selected && styles.methodRowSelected,
+                  !m.available && styles.methodRowDisabled,
+                ]}
+                testID={`method-${m.method}`}
+              >
+                <Ionicons
+                  name={selected ? 'radio-button-on' : 'radio-button-off'}
+                  size={20}
+                  color={selected ? Colors.teal : Colors.textTertiary}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.methodLabel}>{m.label}</Text>
+                  <Text style={styles.methodSub}>{m.reason ?? m.description}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         <View style={styles.secureBox}>
           <FontAwesome5 name="lock" size={12} color={Colors.success} />
           <Text style={styles.secureTxt}>
-            Secured by Razorpay · Full refund if you cancel more than 6 hours before the visit
+            {selectedMethod === 'cash'
+              ? 'Pay your care professional directly at the visit · Full refund if you cancel more than 6 hours before'
+              : 'Secured by Razorpay · Full refund if you cancel more than 6 hours before the visit'}
           </Text>
         </View>
       </ScrollView>
 
       <SafeAreaView style={styles.stickyBar} edges={['bottom']}>
         <GradientButton
-          title={`Pay ${inr(booking.netCost)}`}
+          title={
+            selectedMethod === 'cash'
+              ? `Confirm booking · Pay ${inr(booking.netCost)} at visit`
+              : `Pay ${inr(booking.netCost)}`
+          }
           loading={processing}
-          onPress={pay}
+          onPress={selectedMethod === 'cash' ? payWithCash : pay}
           testID="pay-btn"
         />
       </SafeAreaView>
@@ -402,6 +538,47 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
   noticeTxt: { ...Typography.small, color: Colors.primary, flex: 1, lineHeight: 18 },
+  methodBox: {
+    marginTop: 16,
+    borderRadius: 14,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.divider,
+    padding: 14,
+  },
+  methodHeading: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 10,
+  },
+  methodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.divider,
+    marginBottom: 8,
+  },
+  methodRowSelected: {
+    borderColor: Colors.teal,
+    backgroundColor: 'rgba(0,150,136,0.06)',
+  },
+  methodRowDisabled: {
+    opacity: 0.45,
+  },
+  methodLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  methodSub: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
   secureBox: {
     flexDirection: 'row',
     alignItems: 'center',

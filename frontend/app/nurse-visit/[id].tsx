@@ -54,6 +54,7 @@ import { api } from '../../lib/api';
 import { useStore } from '../../store';
 import { callManager } from '../../lib/call-manager';
 import { SUPPLY_CONFIRMATION_ITEMS } from '../../services/composite-care.service';
+import { inr } from '../../lib/format';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface VisitRecord {
@@ -100,6 +101,41 @@ export default function NurseVisitScreen() {
   // list/detail endpoints.
   const assignments = useStore((s) => s.assignments);
   const booking = assignments.find((a) => a.id === bookingId);
+  const collectCash = useStore((s) => s.collectCashAPI);
+  const [collectingCash, setCollectingCash] = useState(false);
+
+  // Cash is only due when the customer chose it AND it hasn't been taken
+  // yet. Driven by the booking's own payment state rather than a role
+  // check, so it appears for whichever provider is actually on the visit.
+  const cashDue = booking?.paymentStatus === 'cash_due';
+
+  const handleCollectCash = () => {
+    if (!booking) return;
+    Alert.alert(
+      'Confirm cash received',
+      `Only confirm once you have received ${inr(booking.netCost)} from the patient. ` +
+        'This records the payment against the booking.',
+      [
+        { text: 'Not yet', style: 'cancel' },
+        {
+          text: 'I have received it',
+          onPress: async () => {
+            setCollectingCash(true);
+            try {
+              await collectCash(booking.id);
+            } catch (e: any) {
+              Alert.alert(
+                'Could not record the payment',
+                e?.message || 'Please try again before ending the visit.',
+              );
+            } finally {
+              setCollectingCash(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // ── Load existing visit record ─────────────────────────────────────────────
   const loadVisit = useCallback(async () => {
@@ -484,6 +520,33 @@ export default function NurseVisitScreen() {
           ))}
         </View>
 
+        {/* Cash collection — only for cash bookings that are still unpaid. */}
+        {cashDue && (
+          <View style={styles.cashBox} testID="cash-collect-card">
+            <View style={styles.cashHeaderRow}>
+              <Ionicons name="cash-outline" size={20} color={Colors.warning} />
+              <Text style={styles.cashTitle}>Collect {inr(booking!.netCost)} in cash</Text>
+            </View>
+            <Text style={styles.cashSub}>
+              This patient chose to pay at the visit. Collect the amount, then confirm
+              below. The amount is netted off your next payout, since you are holding
+              the company&apos;s money until then.
+            </Text>
+            <TouchableOpacity
+              style={styles.cashBtn}
+              onPress={handleCollectCash}
+              disabled={collectingCash}
+              testID="collect-cash-btn"
+            >
+              {collectingCash ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.cashBtnTxt}>Confirm cash received</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* End visit */}
         <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} testID="end-visit-btn">
           <Ionicons name="log-out-outline" size={18} color={Colors.error} />
@@ -498,6 +561,26 @@ export default function NurseVisitScreen() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bgApp },
+  cashBox: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+  },
+  cashHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cashTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
+  cashSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 6, lineHeight: 17 },
+  cashBtn: {
+    marginTop: 12,
+    backgroundColor: Colors.teal,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  cashBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
 
   // OTP phase

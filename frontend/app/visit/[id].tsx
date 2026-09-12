@@ -398,7 +398,13 @@ export default function BookingDetail() {
 function paymentLabel(b: Booking): string {
   switch (b.paymentStatus) {
     case 'captured':
-      return 'Paid';
+      // A collected cash booking is paid, but saying so plainly is clearer
+      // than "Paid" when the customer handed over notes at the door.
+      return b.paymentMethod === 'cash' ? 'Paid in cash at visit' : 'Paid';
+    case 'cash_due':
+      // Confirmed and being matched — NOT a failure and not "awaiting
+      // payment" in the sense the default branch implies.
+      return 'Pay at visit';
     case 'refunded':
       return 'Refunded — allow 5–7 working days';
     case 'partially_refunded':

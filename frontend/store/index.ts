@@ -111,6 +111,20 @@ interface AppState {
   verifyPaymentAPI: (
     payload: import('../services/payments.service').PaymentVerifyPayload,
   ) => Promise<{ verified: boolean }>;
+  /**
+   * Last-resort settlement check: asks the backend to reconcile this
+   * booking against Razorpay's record of the order. Returns whether the
+   * payment is confirmed captured.
+   */
+  reconcilePaymentAPI: (bookingId: string) => Promise<{ verified: boolean }>;
+  /** Payment methods available for a booking (server-driven). */
+  paymentMethodsAPI: (
+    bookingId: string,
+  ) => Promise<import('../services/payments.service').PaymentMethodsOut>;
+  /** Customer chooses cash-at-visit; confirms the booking. */
+  selectCashPaymentAPI: (bookingId: string) => Promise<{ cashDue: boolean }>;
+  /** Provider records cash collected at the visit. */
+  collectCashAPI: (bookingId: string, amount?: number) => Promise<{ collected: boolean }>;
 
   // ---- nurse ----
   assignments: Booking[];
@@ -486,6 +500,34 @@ export const useStore = create<AppState>((set, get) => {
       // booking to `confirmed` and starts the dispatch clock server-side.
       await get().refreshBookings();
       return { verified: !!r?.verified };
+    },
+
+    reconcilePaymentAPI: async (bookingId) => {
+      const { paymentsService } = await import('../services');
+      const r = await paymentsService.reconcile(bookingId);
+      await get().refreshBookings();
+      return { verified: !!r?.verified };
+    },
+
+    paymentMethodsAPI: async (bookingId) => {
+      const { paymentsService } = await import('../services');
+      return paymentsService.methods(bookingId);
+    },
+
+    selectCashPaymentAPI: async (bookingId) => {
+      const { paymentsService } = await import('../services');
+      const r = await paymentsService.selectCash(bookingId);
+      // Cash confirms the booking server-side and starts dispatch, so the
+      // visit list changes immediately — re-read rather than guess.
+      await get().refreshBookings();
+      return { cashDue: !!r?.cash_due };
+    },
+
+    collectCashAPI: async (bookingId, amount) => {
+      const { paymentsService } = await import('../services');
+      const r = await paymentsService.collectCash(bookingId, amount);
+      await get().refreshBookings();
+      return { collected: !!r?.verified };
     },
 
     // --------------------------------------------------------------- nurse

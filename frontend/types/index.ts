@@ -97,6 +97,7 @@ export type PaymentStatus =
   | 'captured'
   | 'failed'
   | 'refunded'
+  | 'cash_due'
   | 'partially_refunded';
 
 export interface Booking {

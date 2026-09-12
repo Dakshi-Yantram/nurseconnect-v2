@@ -24,6 +24,7 @@ import { OfflineBanner } from '../../components/OfflineBanner';
 import { Colors, Gradients, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { useStore } from '../../store';
 import { humanize } from '../../lib/format';
+import { featuresFor } from '../../lib/provider-capabilities';
 
 export default function NurseProfileScreen() {
   const router = useRouter();
@@ -46,7 +47,11 @@ export default function NurseProfileScreen() {
   const approved = onboarding?.onboarding_status === 'approved';
   const rating = Number(workerProfile?.rating_average ?? 0);
   const ratingCount = workerProfile?.rating_count ?? 0;
-  const isDoctor = workerProfile?.worker_type === 'doctor';
+  // Feature gating is capability-driven, not a role string comparison.
+  // `worker_type === 'doctor'` silently excluded the new Tele-Doctor type
+  // and silently INCLUDED Physical Doctors, who have no use for a
+  // teleconsult queue.
+  const features = featuresFor(workerProfile?.worker_type);
 
   const items = [
     {
@@ -64,7 +69,9 @@ export default function NurseProfileScreen() {
     },
     // Doctor-only: teleconsult queue + e-prescription signature. Hidden for
     // every other provider type (nurse/dentist/physio/caregiver/mother-baby).
-    ...(isDoctor
+    // Tele-only: the waiting queue and call flow. A Physical Doctor never
+    // sees these.
+    ...(features.teleConsultation
       ? [
           {
             icon: 'stethoscope' as const,
@@ -72,6 +79,12 @@ export default function NurseProfileScreen() {
             sub: 'Waiting, diet, patient issues, prescription',
             onPress: () => router.push('/(nurse)/teleconsult-queue'),
           },
+        ]
+      : []),
+    // Prescribing follows medical registration, not practice mode — both
+    // doctor types sign prescriptions.
+    ...(features.ePrescriptions
+      ? [
           {
             icon: 'draw-pen' as const,
             title: 'E-Prescription signature',
