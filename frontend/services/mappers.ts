@@ -64,6 +64,10 @@ export interface BackendBooking {
   tax_amount: string | number;
   total_amount: string | number;
   payment_status: string;
+  // Present since the cash-payment backend change (BookingOut.payment_method,
+  // defaults to 'razorpay' server-side) — declared optional here since older
+  // cached/offline booking payloads captured before that change won't have it.
+  payment_method?: string;
   razorpay_order_id: string | null;
   special_instructions: string | null;
   cancellation_reason: string | null;
@@ -167,8 +171,13 @@ export function mapBooking(
     status: badgeToneFor(rawStatus),
     rawStatus,
     paymentStatus: (b.payment_status || 'pending') as PaymentStatus,
+    paymentMethod: b.payment_method || 'razorpay',
     // Backend uses a Razorpay-aligned enum:
     // pending | initiated | captured | failed | refunded | partially_refunded
+    // plus cash_due — booking confirmed, money collected at the visit.
+    // `paid` deliberately stays FALSE for cash_due: the booking is arranged
+    // but the company has not received the money yet, and treating it as
+    // paid would overstate collections everywhere this flag is read.
     paid: b.payment_status === 'captured' || b.payment_status === 'partially_refunded',
     createdAt: b.created_at,
     // The backend combines date + time as UTC, so mirror that here — building

@@ -80,14 +80,80 @@ export interface PayoutStatement {
   pdf_url: string | null;
 }
 
+export type PaymentMethodId = 'razorpay' | 'cash';
+
+export interface PaymentMethodOption {
+  method: PaymentMethodId;
+  label: string;
+  description: string;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface PaymentMethodsOut {
+  booking_id: string;
+  amount: number;
+  current_method: PaymentMethodId;
+  methods: PaymentMethodOption[];
+}
+
+/** Authoritative payment + booking state for one booking. */
+export interface PaymentState {
+  verified: boolean;
+  booking_id: string;
+  booking_ref: string;
+  booking_status: string;
+  payment_status: string;
+  razorpay_payment_id: string | null;
+  idempotent_replay?: boolean;
+  reconciled?: boolean;
+  reason?: string;
+  payment_method?: PaymentMethodId;
+  /**
+   * Booking is confirmed and dispatchable, money due at the visit.
+   * `verified` is correctly false here — this is NOT a payment failure.
+   */
+  cash_due?: boolean;
+}
+
 export const paymentsService = {
   createOrder: (booking_id: string) =>
     api.post<BackendPaymentOrder>('/payments/order', { booking_id }),
   verify: (payload: PaymentVerifyPayload) =>
-    api.post<{ verified: boolean; booking_status: string; payment_status: string }>(
-      '/payments/verify',
-      payload,
-    ),
+    api.post<PaymentState>('/payments/verify', payload),
+
+  /** Read-only: what the backend believes about this booking's payment. */
+  status: (booking_id: string) =>
+    api.get<PaymentState>(`/payments/status/${booking_id}`),
+
+  /**
+   * Which payment methods this booking may use. Server-driven so adding or
+   * restricting a method doesn't need an app release.
+   */
+  methods: (booking_id: string) =>
+    api.get<PaymentMethodsOut>(`/payments/methods/${booking_id}`),
+
+  /** Customer chooses cash-at-visit. Confirms the booking; no money moves yet. */
+  selectCash: (booking_id: string) =>
+    api.post<PaymentState>('/payments/cash/select', { booking_id }),
+
+  /** Provider records cash taken at the visit. This is the revenue event. */
+  collectCash: (booking_id: string, amount?: number) =>
+    api.post<PaymentState>('/payments/cash/collect', { booking_id, amount }),
+
+  /** Cash this provider is holding but has not yet remitted. */
+  outstandingCash: () =>
+    api.get<{ worker_id: string; outstanding_cash: number }>('/payments/cash/outstanding'),
+
+  /**
+   * Ask the backend to settle this booking against Razorpay's own record of
+   * the order. Used when /verify did not return a clean success, so a
+   * payment that actually went through is never reported to the customer as
+   * a failure. The backend checks Razorpay, not us — this cannot fake a
+   * successful payment.
+   */
+  reconcile: (booking_id: string) =>
+    api.post<PaymentState>(`/payments/reconcile/${booking_id}`, {}),
   history: () => api.get<PaymentHistoryItem[]>('/payments/consumer/history'),
 
   /**
