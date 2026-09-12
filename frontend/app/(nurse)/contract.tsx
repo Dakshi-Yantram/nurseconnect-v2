@@ -1,13 +1,27 @@
 /**
  * Provider contract screen — Stage 1 in-app clickwrap (checkbox + OTP) and
  * Stage 2 Master Agreement (unlocked after first completed booking,
- * executed via Aadhaar eSign).
+ * executed via real Aadhaar eSign through Digio).
  *
  * All contract text is rendered server-side per provider type — this
  * screen never hardcodes wording, name, or registration number. It just
  * displays whatever GET /contracts/me returns and posts the accept action.
+ *
+ * Stage 2 flow (see services/contracts.service.ts for the full contract):
+ *   1. initiateStage2Esign() — server renders + uploads the agreement to
+ *      Digio, returns Digio's own sign_url.
+ *   2. Real sign_url  -> open it in an in-app browser (expo-web-browser),
+ *      watch for it returning to our redirect scheme.
+ *      Mock sign_url  -> MOCK_EXTERNAL_PROVIDERS is on and there is no real
+ *      Digio sandbox to redirect to; render this screen's own mock signing
+ *      modal instead, so the whole flow — initiate, "sign", status check,
+ *      finalize — is still exercised end-to-end.
+ *   3. Poll getStage2EsignStatus() until the SERVER (not this screen) says
+ *      "signed" — nothing this screen does can mark it signed by itself.
+ *   4. acceptStage2() with no esign fields — it finalizes purely from the
+ *      server's own session record.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,13 +31,38 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
 import { Header } from '../../components/Header';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/theme';
-import { contractsService, ContractPreview } from '../../services/contracts.service';
+import {
+  contractsService,
+  ContractPreview,
+  EsignStatusResult,
+} from '../../services/contracts.service';
+
+// Must match the backend's DIGIO_REDIRECT_URL (app/core/config.py). Digio's
+// hosted signing page redirects the in-app browser here once the signer
+// finishes or abandons; expo-web-browser watches for navigation to this
+// scheme to know the session ended and hand control back to this screen.
+const ESIGN_REDIRECT_URL = 'nurseconnect://esign-complete';
+const MOCK_SIGN_URL_PREFIX = 'nurseconnect-mock://digio-sign/';
+
+const POLL_INTERVAL_MS = 2500;
+const POLL_MAX_ATTEMPTS = 12; // ~30s of automatic polling before falling back to manual retry
+
+type EsignPhase =
+  | 'idle'            // nothing started yet
+  | 'starting'        // initiate() in flight
+  | 'awaiting_signer' // browser/mock modal open, or just closed and about to poll
+  | 'confirming'      // polling the server for the outcome
+  | 'stuck'           // polling exhausted without a terminal status — offer manual retry
+  | 'failed'          // server confirmed signing failed/expired
+  | 'finalizing';     // acceptStage2() in flight after status == 'signed'
 
 export default function ContractScreen() {
   const router = useRouter();
@@ -35,6 +74,23 @@ export default function ContractScreen() {
   const [otpSent, setOtpSent] = useState(false);
   const [devOtp, setDevOtp] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // --- Stage 2 e-Sign state ---
+  const [esignPhase, setEsignPhase] = useState<EsignPhase>('idle');
+  const [esignFailureReason, setEsignFailureReason] = useState<string | null>(null);
+  const [mockModalVisible, setMockModalVisible] = useState(false);
+  const [mockSubmitting, setMockSubmitting] = useState(false);
+  const pollAttempts = useRef(0);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPoll = useCallback(() => {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => clearPoll(), [clearPoll]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,28 +153,136 @@ export default function ContractScreen() {
     }
   };
 
-  // Stage 2 e-sign is expected to be completed via the Digio/Leegality/ASP
-  // hosted signing flow (opened in a WebView by the caller of this screen);
-  // this screen records the outcome once that session hands back a
-  // reference id. Wire `startEsignSession(...)` to your ASP's SDK/redirect
-  // URL when that integration is ready.
-  const handleAcceptStage2 = async (esignReferenceId: string, esignDocumentUrl?: string) => {
-    setSubmitting(true);
+  // ── Stage 2 — finalize once the server confirms "signed" ─────────────────
+  const finalizeStage2 = useCallback(async () => {
+    setEsignPhase('finalizing');
     try {
-      await contractsService.acceptStage2({
-        esign_reference_id: esignReferenceId,
-        esign_document_url: esignDocumentUrl,
-        esign_provider: 'digio',
-      });
+      await contractsService.acceptStage2({});
+      clearPoll();
+      setEsignPhase('idle');
       Alert.alert('Master Agreement executed', 'You can now accept your next booking.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
       load();
     } catch (e: any) {
-      Alert.alert('Could not execute agreement', e?.response?.data?.detail ?? e?.message ?? 'Please try again.');
-    } finally {
-      setSubmitting(false);
+      setEsignPhase('failed');
+      setEsignFailureReason(
+        e?.response?.data?.detail?.message ?? e?.response?.data?.detail ?? e?.message ?? 'Please try again.',
+      );
     }
+  }, [clearPoll, load, router]);
+
+  // ── Stage 2 — poll the server for the outcome ─────────────────────────────
+  // Never resolves "signed" from anything client-side; every poll asks the
+  // server, which itself re-checks with Digio if a webhook hasn't landed.
+  const pollEsignStatus = useCallback(
+    async (attempt = 0) => {
+      let status: EsignStatusResult;
+      try {
+        status = await contractsService.getStage2EsignStatus();
+      } catch (e: any) {
+        setEsignPhase('stuck');
+        return;
+      }
+
+      if (status.status === 'signed') {
+        await finalizeStage2();
+        return;
+      }
+      if (status.status === 'failed') {
+        setEsignPhase('failed');
+        setEsignFailureReason(status.failure_reason ?? 'Signing was not completed.');
+        return;
+      }
+
+      // Still created/sent — Digio (or the webhook) hasn't confirmed yet.
+      if (attempt + 1 >= POLL_MAX_ATTEMPTS) {
+        setEsignPhase('stuck');
+        return;
+      }
+      setEsignPhase('confirming');
+      pollTimer.current = setTimeout(() => pollEsignStatus(attempt + 1), POLL_INTERVAL_MS);
+    },
+    [finalizeStage2],
+  );
+
+  // ── Stage 2 — start a session ──────────────────────────────────────────
+  const handleStartStage2Esign = () => {
+    Alert.alert(
+      'e-Sign required',
+      'This will open Aadhaar eSign on state e-Stamp paper via Digio. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue', onPress: beginEsignSession },
+      ],
+    );
+  };
+
+  const beginEsignSession = async () => {
+    setEsignPhase('starting');
+    pollAttempts.current = 0;
+    try {
+      const res = await contractsService.initiateStage2Esign();
+
+      if (res.status === 'signed') {
+        // Session was already signed (e.g. re-opening the screen after the
+        // webhook landed while the app was backgrounded) — finalize right away.
+        await finalizeStage2();
+        return;
+      }
+
+      if (!res.sign_url) {
+        setEsignPhase('stuck');
+        return;
+      }
+
+      if (res.sign_url.startsWith(MOCK_SIGN_URL_PREFIX)) {
+        // No real Digio sandbox to redirect to — render our own in-app mock
+        // signing screen. The backend only accepts a "signed" outcome from
+        // this path via mock-complete, and that endpoint 403s outside
+        // MOCK_EXTERNAL_PROVIDERS, so this can never bypass real signing in
+        // production regardless of what this screen does.
+        setEsignPhase('awaiting_signer');
+        setMockModalVisible(true);
+        return;
+      }
+
+      // Real Digio sign_url — open it in an in-app browser and watch for it
+      // returning to our redirect scheme.
+      setEsignPhase('awaiting_signer');
+      await WebBrowser.openAuthSessionAsync(res.sign_url, ESIGN_REDIRECT_URL);
+      // Whatever the browser session resolved with (success, dismiss, or the
+      // user just closing it), the only thing that matters is what the
+      // server says happened — so unconditionally start confirming.
+      pollEsignStatus(0);
+    } catch (e: any) {
+      setEsignPhase('failed');
+      setEsignFailureReason(e?.response?.data?.detail ?? e?.message ?? 'Could not start e-Sign.');
+    }
+  };
+
+  const handleMockSign = async () => {
+    setMockSubmitting(true);
+    try {
+      await contractsService.mockCompleteStage2Esign();
+      setMockModalVisible(false);
+      pollEsignStatus(0);
+    } catch (e: any) {
+      Alert.alert('Could not simulate signing', e?.message ?? 'Please try again.');
+    } finally {
+      setMockSubmitting(false);
+    }
+  };
+
+  const handleMockCancel = () => {
+    setMockModalVisible(false);
+    setEsignPhase('idle');
+  };
+
+  const handleRetryStage2 = () => {
+    clearPoll();
+    setEsignFailureReason(null);
+    setEsignPhase('idle');
   };
 
   if (loading) {
@@ -189,7 +353,7 @@ export default function ContractScreen() {
                 </TouchableOpacity>
               ) : (
                 <>
-                  {devOtp ? <Text style={styles.devOtpHint}>Dev OTP: {devOtp}</Text> : null}
+                  {__DEV__ && devOtp ? <Text style={styles.devOtpHint}>Dev OTP: {devOtp}</Text> : null}
                   <TextInput
                     style={styles.otpInput}
                     placeholder="Enter OTP"
@@ -206,31 +370,103 @@ export default function ContractScreen() {
             </View>
           ) : (
             <View style={styles.actionArea}>
-              <TouchableOpacity
-                style={styles.primaryButton}
-                disabled={submitting}
-                onPress={() =>
-                  Alert.alert(
-                    'e-Sign required',
-                    'This will open Aadhaar eSign on Telangana e-Stamp paper. Continue?',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      {
-                        text: 'Continue',
-                        // Replace with the real ASP redirect/SDK callback —
-                        // it should resolve to (referenceId, documentUrl).
-                        onPress: () => handleAcceptStage2('PENDING_ASP_INTEGRATION'),
-                      },
-                    ],
-                  )
-                }
-              >
-                {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Execute via Aadhaar eSign</Text>}
-              </TouchableOpacity>
+              {esignPhase === 'idle' && (
+                <TouchableOpacity style={styles.primaryButton} onPress={handleStartStage2Esign}>
+                  <Text style={styles.primaryButtonText}>Execute via Aadhaar eSign</Text>
+                </TouchableOpacity>
+              )}
+
+              {esignPhase === 'starting' && (
+                <View style={styles.esignStatusBox}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.esignStatusText}>Preparing your agreement for signing…</Text>
+                </View>
+              )}
+
+              {esignPhase === 'awaiting_signer' && !mockModalVisible && (
+                <View style={styles.esignStatusBox}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.esignStatusText}>Waiting for the Aadhaar eSign session to complete…</Text>
+                </View>
+              )}
+
+              {esignPhase === 'confirming' && (
+                <View style={styles.esignStatusBox}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.esignStatusText}>
+                    Confirming your signature with Digio… this can take a few moments.
+                  </Text>
+                </View>
+              )}
+
+              {esignPhase === 'finalizing' && (
+                <View style={styles.esignStatusBox}>
+                  <ActivityIndicator color={Colors.primary} />
+                  <Text style={styles.esignStatusText}>Finalizing your Master Agreement…</Text>
+                </View>
+              )}
+
+              {esignPhase === 'stuck' && (
+                <View style={styles.esignStatusBox}>
+                  <Ionicons name="time-outline" size={22} color={Colors.textSecondary} />
+                  <Text style={styles.esignStatusText}>
+                    We haven't heard back from Digio yet. This sometimes just takes a little
+                    longer — check again, or come back later; your session is still open.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.primaryButton, { marginTop: Spacing.sm }]}
+                    onPress={() => pollEsignStatus(0)}
+                  >
+                    <Text style={styles.primaryButtonText}>Check again</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {esignPhase === 'failed' && (
+                <View style={styles.esignStatusBox}>
+                  <Ionicons name="alert-circle-outline" size={22} color={Colors.error} />
+                  <Text style={styles.esignStatusText}>
+                    {esignFailureReason ?? 'e-Sign could not be completed.'}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.primaryButton, { marginTop: Spacing.sm }]}
+                    onPress={handleRetryStage2}
+                  >
+                    <Text style={styles.primaryButtonText}>Try again</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
         </ScrollView>
       )}
+
+      {/* Mock signing modal — only ever shown when the backend returned a
+          nurseconnect-mock:// sign_url, which only happens when
+          MOCK_EXTERNAL_PROVIDERS is on server-side. */}
+      <Modal visible={mockModalVisible} transparent animationType="fade" onRequestClose={handleMockCancel}>
+        <View style={styles.mockOverlay}>
+          <View style={styles.mockCard}>
+            <Ionicons name="finger-print-outline" size={36} color={Colors.primary} />
+            <Text style={styles.mockTitle}>Mock Aadhaar eSign</Text>
+            <Text style={styles.mockBody}>
+              No live Digio sandbox is configured for this environment. This screen stands in
+              for Digio's hosted signing page so the rest of the flow — status confirmation and
+              finalizing your agreement — runs exactly as it will in production.
+            </Text>
+            <TouchableOpacity style={styles.primaryButton} onPress={handleMockSign} disabled={mockSubmitting}>
+              {mockSubmitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Simulate: I have signed</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.mockCancelButton} onPress={handleMockCancel} disabled={mockSubmitting}>
+              <Text style={styles.mockCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -290,4 +526,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryButtonText: { ...Typography.bodyBold, color: '#fff' },
+  esignStatusBox: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.card,
+    backgroundColor: '#fff',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  esignStatusText: { ...Typography.body, color: Colors.textSecondary, textAlign: 'center' },
+  mockOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+  mockCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: Radius.lg,
+    padding: Spacing.card,
+    alignItems: 'center',
+    gap: Spacing.sm,
+    ...Shadows.card,
+  },
+  mockTitle: { ...Typography.h3, color: Colors.textPrimary },
+  mockBody: { ...Typography.small, color: Colors.textSecondary, textAlign: 'center' },
+  mockCancelButton: { paddingVertical: Spacing.xs },
+  mockCancelText: { ...Typography.body, color: Colors.textTertiary },
 });

@@ -31,6 +31,17 @@ type Mode = 'signin' | 'register' | 'verify' | 'otp_phone' | 'otp_code';
 /** Which entry point the user came in through. */
 type Entry = 'family' | 'nurse' | 'staff';
 
+// Human-readable names for the backend role a phone number is already
+// registered under (see /auth/otp/send -> existing_role).
+const ROLE_LABEL: Record<string, string> = {
+  consumer: 'patient / family account',
+  worker: 'care professional',
+  admin: 'staff account',
+  reviewer: 'staff account',
+  operations: 'staff account',
+  support: 'staff account',
+};
+
 const ENTRY_COPY: Record<Entry, { title: string; sub: string }> = {
   family: { title: 'Welcome back', sub: 'Sign in to book and track care' },
   nurse: { title: 'Care professional sign in', sub: 'Your visits, earnings and training' },
@@ -171,9 +182,16 @@ export default function Login() {
         worker_type: workerType,
       });
       setVerifyEmail(regEmail);
-      setVerifyCode(res.dev_verification_code ?? '');
+      // Only ever prefill from the dev code in a development build. In
+      // production the backend no longer returns it at all, but gating here
+      // too means a misconfigured backend can't leak a code into the UI.
+      setVerifyCode(__DEV__ ? (res.dev_verification_code ?? '') : '');
       setMode('verify');
-      setNotice(`We sent a verification code to ${res.email}.`);
+      setNotice(
+        res.email_sent === false
+          ? "We couldn't send that email just now. Tap Resend, or contact support if it keeps failing."
+          : `We sent a verification code to ${res.email}.`,
+      );
     } catch (e: any) {
       setError(describe(e, 'Could not create your account'));
     } finally {
@@ -203,8 +221,12 @@ export default function Login() {
     setBusy(true);
     try {
       const res = await authService.resendEmailVerification(verifyEmail);
-      setVerifyCode(res.dev_verification_code ?? '');
-      setNotice('A new code is on its way.');
+      setVerifyCode(__DEV__ ? (res.dev_verification_code ?? '') : '');
+      setNotice(
+        res.email_sent === false
+          ? "We still couldn't send that email. Please contact support."
+          : 'A new code is on its way.',
+      );
     } catch (e: any) {
       setError(describe(e, 'Could not resend the code'));
     } finally {
@@ -221,10 +243,21 @@ export default function Login() {
     setBusy(true);
     try {
       const res = await authService.sendOtp(phone);
-      setOtp(res.dev_otp ?? '');
+      setOtp(__DEV__ ? (res.dev_otp ?? '') : '');
       setResendIn(30);
       setMode('otp_code');
-      setNotice(`Code sent to ${res.phone_e164}.`);
+      // The backend tells us up front which role this number already
+      // belongs to. Say so now rather than after they've typed a code —
+      // and don't block them: the OTP still signs them in, just into the
+      // right app for their account.
+      if (res.role_mismatch && res.existing_role) {
+        setNotice(
+          `This number is registered as a ${ROLE_LABEL[res.existing_role] ?? res.existing_role}. ` +
+            `Enter the code and we'll take you to the right place.`,
+        );
+      } else {
+        setNotice(`Code sent to ${res.phone_e164}.`);
+      }
     } catch (e: any) {
       setError(describe(e, 'Could not send the code'));
     } finally {
@@ -238,11 +271,16 @@ export default function Login() {
     setBusy(true);
     try {
       const res = await authService.verifyOtp(phone, otp);
+      // enterApp routes on res.user.role, which is the account's real role.
+      // A number registered to a care professional now signs in and lands on
+      // the care-professional portal instead of hitting a 409 dead end.
       await enterApp(res.user);
     } catch (e: any) {
+      // Older backends still answer 409 on a role difference. Keep the
+      // message so the app degrades gracefully against an un-upgraded API.
       if (e?.status === 409) {
         setError(
-          'This number is registered as a care professional. Use the care professional sign in.',
+          'This number is registered to a different account type. Please use the matching sign in.',
         );
       } else {
         setError(describe(e, 'That code did not work'));

@@ -82,11 +82,9 @@ export default function OtpScreen() {
         <View style={{ marginTop: 40 }}>
           <OTPInput value={otp} onChange={setOtp} length={6} />
           {error ? <Text style={styles.err}>{error}</Text> : null}
-          {devOtp ? (
+          {__DEV__ && devOtp ? (
             <Text style={styles.hint}>Dev OTP: {devOtp}</Text>
-          ) : (
-            <Text style={styles.hint}>Use 123456 for demo</Text>
-          )}
+          ) : null}
         </View>
 
         <View style={styles.resendRow}>

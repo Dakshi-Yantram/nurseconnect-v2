@@ -98,7 +98,9 @@ export default function PaymentSuccess() {
           Booking confirmed
         </Text>
         <Text style={styles.sub} testID="booking-confirmed-subtitle">
-          Care professional will be assigned before your visit.
+          {booking?.paymentStatus === 'cash_due'
+            ? 'Care professional will be assigned before your visit. Pay them directly when they arrive.'
+            : 'Care professional will be assigned before your visit.'}
         </Text>
       </LinearGradient>
 
@@ -128,8 +130,19 @@ export default function PaymentSuccess() {
           </Text>
         </View>
         <View style={styles.row}>
-          <Text style={styles.l}>Amount paid</Text>
-          <Text style={[styles.r, { color: Colors.success }]} testID="confirmed-amount">
+          {/* A cash booking hasn't been paid yet — the customer chose to
+              hand the amount to the care professional at the visit. Saying
+              "Amount paid" here would misstate what actually happened. */}
+          <Text style={styles.l}>
+            {booking?.paymentStatus === 'cash_due' ? 'Amount due at visit' : 'Amount paid'}
+          </Text>
+          <Text
+            style={[
+              styles.r,
+              { color: booking?.paymentStatus === 'cash_due' ? Colors.warning : Colors.success },
+            ]}
+            testID="confirmed-amount"
+          >
             ₹{booking?.netCost ?? 0}
           </Text>
         </View>

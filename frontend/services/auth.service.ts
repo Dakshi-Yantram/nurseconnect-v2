@@ -37,6 +37,15 @@ export interface TokenPair {
 export interface AuthResponse {
   user: BackendUser;
   tokens: TokenPair;
+  /**
+   * The role the session was actually issued for (always equals user.role).
+   * When a number is already registered, the backend authenticates it under
+   * its OWN role rather than the one the sign-in screen asked for, so the
+   * caller should route by this, not by which screen the user started on.
+   */
+  authenticated_role?: string | null;
+  /** True when authenticated_role differs from the requested role. */
+  role_switched?: boolean;
 }
 
 export interface SendOtpResponse {
@@ -44,6 +53,14 @@ export interface SendOtpResponse {
   phone_e164: string;
   expires_in_seconds: number;
   dev_otp?: string | null;
+  /**
+   * The role this number is already registered under, if any. Lets the app
+   * tell the user which sign-in applies BEFORE they type a code, instead of
+   * collecting one and then rejecting it.
+   */
+  existing_role?: string | null;
+  /** True when existing_role differs from the role this screen asked for. */
+  role_mismatch?: boolean;
 }
 
 export interface RegisterResponse {
@@ -51,6 +68,8 @@ export interface RegisterResponse {
   email: string;
   expires_in_seconds: number;
   dev_verification_code?: string | null;
+  /** False when the verification email could not actually be dispatched. */
+  email_sent?: boolean;
 }
 
 /** Backend expects E.164. Bare 10-digit Indian numbers get the +91 prefix. */
