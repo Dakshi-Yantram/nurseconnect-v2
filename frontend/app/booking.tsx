@@ -34,7 +34,32 @@ import { useStore } from '../store';
 import { formatAddress } from '../services/addresses.service';
 import { inr, to24HourTime } from '../lib/format';
 
-const SLOTS = ['08:00 AM', '10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM', '06:00 PM'];
+/**
+ * 30-minute slots from 8:00 AM to 8:00 PM. Previously these jumped in
+ * 2-hour steps (8, 10, 12, 2, 4, 6) which left huge gaps and stopped at
+ * 6 PM — most on-demand booking apps (e.g. Urban Company) offer half-hour
+ * granularity across the full service day, so we match that here.
+ */
+function buildAllSlots(): { label: string; hour: number; minute: number }[] {
+  const out: { label: string; hour: number; minute: number }[] = [];
+  for (let totalMin = 8 * 60; totalMin <= 20 * 60; totalMin += 30) {
+    const hour = Math.floor(totalMin / 60);
+    const minute = totalMin % 60;
+    const period = hour < 12 ? 'AM' : 'PM';
+    const h12 = hour % 12 === 0 ? 12 : hour % 12;
+    out.push({
+      label: `${String(h12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${period}`,
+      hour,
+      minute,
+    });
+  }
+  return out;
+}
+
+const ALL_SLOTS = buildAllSlots();
+
+/** Minutes of lead time required before a slot can be booked (prep/travel time for the nurse). */
+const SLOT_LEAD_MINUTES = 60;
 
 /** Next 14 days, built in local time so "today" is the user's today. */
 function buildDays() {
@@ -69,7 +94,43 @@ export default function BookingScreen() {
 
   const days = useMemo(buildDays, []);
   const [dayIdx, setDayIdx] = useState(0);
-  const [slot, setSlot] = useState(SLOTS[1]);
+
+  /**
+   * Slots for the selected day. For today, anything less than
+   * SLOT_LEAD_MINUTES away (or already passed) is filtered out so the user
+   * can never submit a booking for a time that's already gone. Other days
+   * show the full day's slots.
+   */
+  const availableSlots = useMemo(() => {
+    const selectedDay = days[dayIdx];
+    const isToday = dayIdx === 0;
+    if (!isToday) return ALL_SLOTS;
+    const now = new Date();
+    const earliest = new Date(now.getTime() + SLOT_LEAD_MINUTES * 60 * 1000);
+    return ALL_SLOTS.filter((s) => {
+      const slotTime = new Date(
+        selectedDay.date.getFullYear(),
+        selectedDay.date.getMonth(),
+        selectedDay.date.getDate(),
+        s.hour,
+        s.minute,
+      );
+      return slotTime >= earliest;
+    });
+  }, [days, dayIdx]);
+
+  const [slot, setSlot] = useState(availableSlots[0]?.label ?? ALL_SLOTS[0].label);
+
+  // If the chosen day changes (or time simply passes) and the currently
+  // selected slot is no longer valid, snap to the first available one
+  // instead of silently letting a stale/past slot stay submittable.
+  React.useEffect(() => {
+    if (availableSlots.length === 0) return;
+    if (!availableSlots.some((s) => s.label === slot)) {
+      setSlot(availableSlots[0].label);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableSlots]);
   const [patientId, setPatientId] = useState<string | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
@@ -340,18 +401,26 @@ export default function BookingScreen() {
 
         {/* ----------------------------------------------------- slot ---- */}
         <Text style={styles.sec}>Preferred start time</Text>
-        <View style={styles.slotsGrid}>
-          {SLOTS.map((s) => (
-            <TouchableOpacity
-              key={s}
-              style={[styles.slot, slot === s && styles.slotActive]}
-              onPress={() => setSlot(s)}
-              testID={`slot-${s}`}
-            >
-              <Text style={[styles.slotTxt, slot === s && { color: '#fff' }]}>{s}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {availableSlots.length === 0 ? (
+          <Text style={styles.urgentSub}>
+            No more slots left today — please pick another date.
+          </Text>
+        ) : (
+          <View style={styles.slotsGrid}>
+            {availableSlots.map((s) => (
+              <TouchableOpacity
+                key={s.label}
+                style={[styles.slot, slot === s.label && styles.slotActive]}
+                onPress={() => setSlot(s.label)}
+                testID={`slot-${s.label}`}
+              >
+                <Text style={[styles.slotTxt, slot === s.label && { color: '#fff' }]}>
+                  {s.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {/* --------------------------------------------------- urgent ---- */}
         <TouchableOpacity
@@ -411,6 +480,7 @@ export default function BookingScreen() {
           title={needsPrescriptionGate ? 'Continue' : 'Continue to payment'}
           onPress={startBooking}
           loading={submitting}
+          disabled={availableSlots.length === 0}
           testID="proceed-payment-btn"
         />
       </SafeAreaView>
