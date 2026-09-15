@@ -34,7 +34,7 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../../constants/th
 import { visitsService } from '../../services/visits.service';
 
 /** Mirrors the backend's baseline floor in care_workflow_engine.py. */
-const MIN_CHARS = 10;
+const MIN_CHARS = 1;
 
 interface MissingItem {
   type: string;
