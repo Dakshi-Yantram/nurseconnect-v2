@@ -380,7 +380,25 @@ export default function ClinicalDocumentation() {
     } catch (e: any) {
       // Surface backend MANDATORY_DOCUMENTATION_INCOMPLETE
       const detail = e?.detail;
-      if (detail?.code === 'MANDATORY_DOCUMENTATION_INCOMPLETE') {
+      if (detail?.code === 'VISIT_REPORT_REQUIRED') {
+        // The only thing missing is the visit report, and there is now a
+        // screen for exactly that — send the nurse straight there instead of
+        // listing the fields and leaving her to find her own way.
+        setCheckoutMissing(detail.missing_items || []);
+        Alert.alert(
+          'Visit report needed',
+          detail.message ||
+            'Fill in and submit your visit report before completing this visit.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Write report',
+              onPress: () =>
+                router.push({ pathname: '/visit-report/[id]', params: { id: bookingId } }),
+            },
+          ],
+        );
+      } else if (detail?.code === 'MANDATORY_DOCUMENTATION_INCOMPLETE') {
         setCheckoutMissing(detail.missing_items || []);
         Alert.alert(
           'Please complete required documentation before checkout.',

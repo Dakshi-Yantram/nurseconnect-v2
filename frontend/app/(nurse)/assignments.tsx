@@ -403,15 +403,28 @@ const VisitRow: React.FC<{
       )}
 
       {mode === 'past' && booking.rawStatus === 'completed' && (
-        <TouchableOpacity
-          onPress={(e) => {
-            e.stopPropagation();
-            router.push('/earnings');
-          }}
-          testID={`see-payout-${booking.id}`}
-        >
-          <Text style={styles.payoutLink}>See your payout for this visit in Earnings →</Text>
-        </TouchableOpacity>
+        <>
+          {/* Item 10: once a visit was marked complete its report became
+              unreachable from anywhere in the app. */}
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              router.push({ pathname: '/visit-report/[id]', params: { id: booking.id } });
+            }}
+            testID={`visit-report-${booking.id}`}
+          >
+            <Text style={styles.payoutLink}>View or edit your visit report →</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              router.push('/earnings');
+            }}
+            testID={`see-payout-${booking.id}`}
+          >
+            <Text style={styles.payoutLink}>See your payout for this visit in Earnings →</Text>
+          </TouchableOpacity>
+        </>
       )}
     </TouchableOpacity>
   );

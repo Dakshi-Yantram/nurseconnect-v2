@@ -120,13 +120,37 @@ export default function Patients() {
         allergies: form.allergies,
         current_medications: form.current_medications,
       };
+      let createdId: string | null = null;
       if (editing) {
         await usersService.updatePatient(editing.id, payload);
       } else {
-        await usersService.createPatient(payload);
+        const created = await usersService.createPatient(payload);
+        createdId = (created as any)?.id ?? null;
       }
       await loadPatients();
       setEditorOpen(false);
+
+      // Consents are an enforcement point, not paperwork: the backend refuses
+      // clinical checklist submission without a `service` consent and blocks
+      // photo documentation without a `photo` consent, so an unconsented
+      // patient stops the nurse at the door mid-visit. Adding a patient used
+      // to leave consents entirely optional behind a "Manage consents" link
+      // nobody had a reason to tap. A new patient now goes straight into the
+      // consent review, and the prompt has no dismiss path that skips it.
+      if (createdId) {
+        Alert.alert(
+          'Review consents for ' + form.full_name.trim(),
+          "Before anyone can be booked for care, we need consent for treatment, photos and medication. It takes a moment and it's required before the first visit.",
+          [
+            {
+              text: 'Review now',
+              onPress: () =>
+                router.push({ pathname: '/consents', params: { patientId: createdId } }),
+            },
+          ],
+          { cancelable: false },
+        );
+      }
     } catch (e: any) {
       Alert.alert('Could not save', e?.message || 'Please try again.');
     } finally {

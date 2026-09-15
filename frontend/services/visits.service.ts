@@ -118,8 +118,54 @@ export interface VisitStartOtp {
   otp: string;
 }
 
+/** Nurse-facing visit report, plus what's still blocking completion. */
+export interface VisitReportOut {
+  booking_id: string;
+  visit_id: string;
+  care_notes: string | null;
+  family_summary: string | null;
+  documentation_complete: boolean;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  actual_duration_minutes: number | null;
+  status: string;
+  can_complete_visit?: boolean;
+  missing_items?: {
+    type: string;
+    id: string;
+    label: string;
+    kind: string;
+    blocks_checkout: boolean;
+  }[];
+}
+
+/** The family-facing view of a finished visit (item 14). */
+export interface ConsumerVisitReportOut {
+  booking_id: string;
+  visit_id: string;
+  family_summary: string | null;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  actual_duration_minutes: number | null;
+  photo_urls: string[];
+  rating_by_consumer: number | null;
+}
+
 export const visitsService = {
   get: (bookingId: string) => api.get<VisitRecordOut>(`/visits/${bookingId}`),
+
+  /** Nurse: read the report for a visit (works before and after checkout). */
+  getReport: (bookingId: string) => api.get<VisitReportOut>(`/visits/${bookingId}/report`),
+
+  /** Nurse: save or revise the report. Required before a visit can complete. */
+  saveReport: (
+    bookingId: string,
+    payload: { care_notes?: string; family_summary?: string },
+  ) => api.put<VisitReportOut>(`/visits/${bookingId}/report`, payload),
+
+  /** Patient / family: read the finished report for a completed visit. */
+  getConsumerReport: (bookingId: string) =>
+    api.get<ConsumerVisitReportOut>(`/visits/${bookingId}/report/consumer`),
   checkin: (bookingId: string, lat: number, lng: number) =>
     api.post<VisitRecordOut>(`/visits/${bookingId}/checkin`, { latitude: lat, longitude: lng }),
 

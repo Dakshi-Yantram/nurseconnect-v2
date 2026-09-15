@@ -148,10 +148,21 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      const res = await authService.login(email, password);
+      // Tell the backend which door we're standing at. Signing in with a
+      // family member's credentials on "Care professional sign in" used to
+      // succeed and silently land them in the family app, because neither
+      // side ever compared the account's role to the chosen entry point.
+      // Staff entry deliberately passes nothing: that portal serves admin,
+      // reviewer, operations and support alike.
+      const expectedRole =
+        entry === 'nurse' ? 'nurse' : entry === 'family' ? 'family' : undefined;
+      const res = await authService.login(email, password, undefined, expectedRole);
       await enterApp(res.user);
     } catch (e: any) {
-      if (e?.status === 403 && /verify your email/i.test(String(e?.message))) {
+      const detail = e?.detail?.detail ?? e?.detail;
+      if (e?.status === 403 && detail?.code === 'ROLE_MISMATCH') {
+        setError(detail.message);
+      } else if (e?.status === 403 && /verify your email/i.test(String(e?.message))) {
         setVerifyEmail(email);
         setMode('verify');
         setNotice('Confirm your email address to finish setting up your account.');
@@ -234,7 +245,7 @@ export default function Login() {
     }
   };
 
-  const doSendOtp = async () => {
+  const doSendOtp = async (forceResend = false) => {
     clearMessages();
     if (!/^[6-9]\d{9}$/.test(phone.replace(/[\s-]/g, ''))) {
       setError('Enter a valid 10-digit Indian mobile number');
@@ -242,7 +253,7 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      const res = await authService.sendOtp(phone);
+      const res = await authService.sendOtp(phone, 'login', forceResend);
       setOtp(__DEV__ ? (res.dev_otp ?? '') : '');
       setResendIn(30);
       setMode('otp_code');
@@ -254,6 +265,12 @@ export default function Login() {
         setNotice(
           `This number is registered as a ${ROLE_LABEL[res.existing_role] ?? res.existing_role}. ` +
             `Enter the code and we'll take you to the right place.`,
+        );
+      } else if (res.reused) {
+        // No new SMS went out — say so, rather than implying another text is
+        // coming and inviting the user to wait for one that will never land.
+        setNotice(
+          `Enter the code we already sent to ${res.phone_e164}. It's still valid — tap Resend if you no longer have it.`,
         );
       } else {
         setNotice(`Code sent to ${res.phone_e164}.`);
@@ -364,7 +381,10 @@ export default function Login() {
                 />
                 <GradientButton
                   title="Send code"
-                  onPress={doSendOtp}
+                  // Wrapped, not passed by reference: the press handler
+                  // receives an event object, which would arrive as a truthy
+                  // `forceResend` and defeat the code-reuse fix.
+                  onPress={() => doSendOtp(false)}
                   loading={busy}
                   testID="login-send-otp"
                 />
@@ -409,7 +429,7 @@ export default function Login() {
                   {resendIn > 0 ? (
                     <Text style={styles.resendTxt}>Resend in {resendIn}s</Text>
                   ) : (
-                    <TouchableOpacity onPress={doSendOtp} testID="otp-resend">
+                    <TouchableOpacity onPress={() => doSendOtp(true)} testID="otp-resend">
                       <Text
                         style={[styles.resendTxt, { color: Colors.primary, fontWeight: '700' }]}
                       >

@@ -103,6 +103,8 @@ export interface BackendNotification {
   status: string;
   read_at: string | null;
   created_at: string;
+  /** Deep-link target resolved server-side; null when there isn't one. */
+  route?: string | null;
 }
 
 const toNum = (v: string | number | null | undefined, d = 0): number => {
@@ -232,5 +234,6 @@ export function mapNotification(n: BackendNotification): NotificationItem {
     group,
     type,
     read: !!n.read_at,
+    route: n.route ?? null,
   };
 }
