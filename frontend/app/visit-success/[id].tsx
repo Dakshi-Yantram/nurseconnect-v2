@@ -18,12 +18,13 @@ export default function VisitSuccess() {
 
   useEffect(() => {
     Animated.spring(scale, { toValue: 1, friction: 4, useNativeDriver: true }).start();
-    // Auto-redirect to Nurse Visits home (Past tab) after 3.5s if user does nothing
-    const t = setTimeout(() => {
-      router.replace({ pathname: '/(nurse)/assignments', params: { tab: 'past' } });
-    }, 3500);
-    return () => clearTimeout(t);
-  }, [scale, router]);
+    // There used to be a setTimeout here that router.replace'd to the Visits
+    // list after 3.5 seconds. That is the reported "screen flashes and
+    // disappears after ~3 seconds" — it was an intentional auto-redirect,
+    // not a navigation glitch. A nurse who has just finished a visit needs to
+    // read the summary and choose what to do next, so the screen now stays
+    // put until one of the two buttons below is tapped.
+  }, [scale]);
 
   return (
     <SafeAreaView style={styles.safe} testID="visit-success-screen">

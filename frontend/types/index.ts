@@ -182,6 +182,12 @@ export interface NotificationItem {
   group: 'Today' | 'Yesterday' | 'Earlier';
   type: 'booking' | 'payment' | 'alert' | 'system';
   read: boolean;
+  /**
+   * In-app destination, resolved by the backend from the notification's
+   * payload. Null means this notification has nothing specific to open, and
+   * the row renders as non-tappable rather than pretending otherwise.
+   */
+  route?: string | null;
 }
 
 export interface KitItem {

@@ -67,6 +67,15 @@ export default function NurseProfileScreen() {
       sub: 'Payouts and history',
       onPress: () => router.push('/earnings'),
     },
+    {
+      // Previously unreachable: the bank-details API and its service wrapper
+      // both existed, but no screen ever linked to them, so a nurse could
+      // not tell us where to send her money.
+      icon: 'bank-outline' as const,
+      title: 'Payout details',
+      sub: 'Bank account for your earnings',
+      onPress: () => router.push('/bank-details'),
+    },
     // Doctor-only: teleconsult queue + e-prescription signature. Hidden for
     // every other provider type (nurse/dentist/physio/caregiver/mother-baby).
     // Tele-only: the waiting queue and call flow. A Physical Doctor never

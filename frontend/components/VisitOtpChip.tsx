@@ -33,6 +33,10 @@ export const VisitOtpChip: React.FC<Props> = ({ bookingId, status }) => {
 
   const eligible = ELIGIBLE.includes(status);
 
+  // The backend's generate-start-otp is idempotent — it returns the live
+  // code and its remaining TTL rather than minting a new one — so a remount
+  // costs nothing. What it must NOT do is fire on every render: `fetchedFor`
+  // below keeps one fetch per booking per mounted chip.
   const load = useCallback(async () => {
     setLoading(true);
     setFailed(false);

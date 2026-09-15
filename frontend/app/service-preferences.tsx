@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme';
@@ -67,6 +68,7 @@ function humanLockedReason(r: string | null): string {
 }
 
 export default function ServicePreferencesScreen() {
+  const router = useRouter();
   const [items, setItems] = useState<ServiceEligibilityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -112,16 +114,38 @@ export default function ServicePreferencesScreen() {
       } catch (e: any) {
         const detail = e?.detail?.detail || e?.detail;
         const code = detail?.code || e?.detail?.code;
-        const reason = detail?.locked_reason || detail?.message;
-        Alert.alert(
-          code === 'WORKER_NOT_QUALIFIED_FOR_SERVICE' ? 'Not qualified yet' : 'Update failed',
-          reason || e?.message || 'Please try again',
-        );
+        const locked = detail?.locked_reason;
+        const reason = locked || detail?.message;
+
+        // A service the nurse hasn't trained for is the common case here, and
+        // it has an obvious next step — go and do the training. Telling them
+        // only "not qualified" left them with nowhere to go, so that specific
+        // reason now offers the route. Everything else keeps the plain alert.
+        if (
+          code === 'WORKER_NOT_QUALIFIED_FOR_SERVICE' &&
+          (locked === 'TRAINING_REQUIRED' || locked === 'CERTIFICATE_REQUIRED')
+        ) {
+          Alert.alert(
+            'This service needs training',
+            `${item.name} requires training you haven't completed yet. Finish it in Training and this will unlock automatically.`,
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Go to Training', onPress: () => router.push('/training') },
+            ],
+          );
+        } else {
+          Alert.alert(
+            code === 'WORKER_NOT_QUALIFIED_FOR_SERVICE' ? 'Not qualified yet' : 'Update failed',
+            humanLockedReason(reason) !== 'Locked' && locked
+              ? humanLockedReason(locked)
+              : reason || e?.message || 'Please try again',
+          );
+        }
       } finally {
         setPendingId(null);
       }
     },
-    [],
+    [router],
   );
 
   const renderCard = (it: ServiceEligibilityItem) => {
