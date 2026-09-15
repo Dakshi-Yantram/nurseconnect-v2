@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { EmptyState } from '../components/EmptyState';
@@ -10,6 +10,7 @@ import { Colors, Radius, Spacing, Typography } from '../constants/theme';
 import { useStore } from '../store';
 
 export default function NotificationsScreen() {
+  const router = useRouter();
   const notifications = useStore((s) => s.notifications);
   const markRead = useStore((s) => s.markNotificationRead);
   const markAllRead = useStore((s) => s.markAllRead);
@@ -69,10 +70,19 @@ export default function NotificationsScreen() {
             if (item.header) {
               return <Text style={styles.group}>{item.header}</Text>;
             }
+            // Tapping a notification used to only mark it read and go
+            // nowhere. The backend now resolves a destination from the
+            // notification's payload; rows without one stay inert instead of
+            // looking tappable and doing nothing.
+            const target: string | null = item.route ?? null;
             return (
               <TouchableOpacity
                 style={[styles.row, !item.read && styles.unread]}
-                onPress={() => markRead(item.id)}
+                activeOpacity={target ? 0.7 : 1}
+                onPress={() => {
+                  markRead(item.id);
+                  if (target) router.push(target as any);
+                }}
                 testID={`notif-${item.id}`}
               >
                 <View style={[styles.icon, { backgroundColor: getIconBg(item.type) }]}>
@@ -84,6 +94,14 @@ export default function NotificationsScreen() {
                   <Text style={styles.time}>{item.time}</Text>
                 </View>
                 {!item.read && <View style={styles.dot} />}
+                {!!target && (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={Colors.textTertiary}
+                    style={{ marginLeft: 6 }}
+                  />
+                )}
               </TouchableOpacity>
             );
           }}

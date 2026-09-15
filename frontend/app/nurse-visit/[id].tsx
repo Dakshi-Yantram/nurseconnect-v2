@@ -254,9 +254,17 @@ export default function NurseVisitScreen() {
   const handleEndVisit = () => {
     Alert.alert(
       'End visit',
-      "You'll be taken to the visit documentation. Vitals and required notes must be submitted before the visit can be marked complete.",
+      "You'll be taken to the visit documentation. Your visit report, vitals and any required notes must be submitted before the visit can be marked complete.",
       [
         { text: 'Cancel', style: 'cancel' },
+        {
+          // The report is now a required gate server-side (checkout returns
+          // VISIT_REPORT_REQUIRED without it), so offer it directly rather
+          // than letting the nurse discover the block at the last step.
+          text: 'Write report',
+          onPress: () =>
+            router.push({ pathname: '/visit-report/[id]', params: { id: bookingId! } }),
+        },
         {
           text: 'Continue',
           onPress: () =>

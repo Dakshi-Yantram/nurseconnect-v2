@@ -719,6 +719,7 @@ export const useStore = create<AppState>((set, get) => {
         if (
           !e?.network ||
           code === 'MANDATORY_DOCUMENTATION_INCOMPLETE' ||
+          code === 'VISIT_REPORT_REQUIRED' ||
           code === 'CLINICAL_TEMPLATE_MISSING'
         ) {
           set({ apiError: e?.detail?.message || e?.message || 'Checkout blocked' });

@@ -61,6 +61,12 @@ export interface SendOtpResponse {
   existing_role?: string | null;
   /** True when existing_role differs from the role this screen asked for. */
   role_mismatch?: boolean;
+  /**
+   * True when the backend returned a code it had already issued and still
+   * valid, and therefore sent no new SMS. The UI should keep its existing
+   * "enter the code" state rather than claiming a fresh code is on its way.
+   */
+  reused?: boolean;
 }
 
 export interface RegisterResponse {
@@ -109,7 +115,18 @@ export const authService = {
   // Email + password (all roles, including trainer / clinical lead whose
   // accounts are created for them by Operations on the web portal)
   // ---------------------------------------------------------------------
-  async login(email: string, password: string, deviceId?: string): Promise<AuthResponse> {
+  /**
+   * @param expectedRole Which sign-in door the user came through. When given,
+   *   the backend refuses an account whose stored role doesn't match (403
+   *   ROLE_MISMATCH) instead of signing them in and routing them to the other
+   *   portal. Omit it for the staff portal, which serves several roles.
+   */
+  async login(
+    email: string,
+    password: string,
+    deviceId?: string,
+    expectedRole?: SelfRegisterRole,
+  ): Promise<AuthResponse> {
     const res = await api.post<AuthResponse>(
       '/auth/login',
       {
@@ -117,6 +134,7 @@ export const authService = {
         password,
         device_id: deviceId,
         device_platform: 'expo',
+        ...(expectedRole ? { expected_role: toBackendRole(expectedRole) } : {}),
       },
       NO_AUTH,
     );
@@ -165,10 +183,20 @@ export const authService = {
   // Phone OTP (consumer only — the backend rejects worker numbers here and
   // tells them to use the care-professional login)
   // ---------------------------------------------------------------------
-  async sendOtp(phone: string, purpose: 'login' | 'signup' = 'login'): Promise<SendOtpResponse> {
+  /**
+   * @param forceResend Pass true ONLY from an explicit "Resend code" tap.
+   *   Left false, the backend hands back the code it already issued if it's
+   *   still valid and sends no new SMS -- which is what stops a screen
+   *   remount or a retry from firing another text at the user.
+   */
+  async sendOtp(
+    phone: string,
+    purpose: 'login' | 'signup' = 'login',
+    forceResend = false,
+  ): Promise<SendOtpResponse> {
     return api.post<SendOtpResponse>(
       '/auth/otp/send',
-      { phone_e164: normalizePhone(phone), purpose },
+      { phone_e164: normalizePhone(phone), purpose, force_resend: forceResend },
       NO_AUTH,
     );
   },
