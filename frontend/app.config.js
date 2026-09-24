@@ -92,8 +92,6 @@ module.exports = () => ({
         'android.permission.POST_NOTIFICATIONS',
         'android.permission.FOREGROUND_SERVICE',
         'android.permission.FOREGROUND_SERVICE_MICROPHONE',
-        // Required to raise the incoming-call screen over the lock screen.
-        'android.permission.USE_FULL_SCREEN_INTENT',
         'android.permission.WAKE_LOCK',
         // Clinical photo capture/upload (Assessment/Visit Details screen),
         // and — since this same permission gates it — the optional video
@@ -103,6 +101,16 @@ module.exports = () => ({
         // open, even if the user taps "Allow" — the OS never shows a
         // prompt because the app never declared the permission.
         'android.permission.CAMERA',
+      ],
+      // Google Play rejected USE_FULL_SCREEN_INTENT (version code 18).
+      // Removed from `permissions` above and blocked here so no library or
+      // prebuild can re-add it. The legacy storage permissions are obsolete
+      // on current Android versions. Re-introduce full-screen intent later
+      // only together with the Play Console full-screen intent declaration.
+      blockedPermissions: [
+        'android.permission.USE_FULL_SCREEN_INTENT',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
       ],
     },
 
