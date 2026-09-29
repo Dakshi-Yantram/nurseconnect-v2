@@ -68,6 +68,7 @@ export default function ContractScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [contracts, setContracts] = useState<ContractPreview[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeStage, setActiveStage] = useState<1 | 2>(1);
   const [checked, setChecked] = useState(false);
   const [otp, setOtp] = useState('');
@@ -94,14 +95,24 @@ export default function ContractScreen() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await contractsService.getMyContracts();
-      setContracts(data);
+      // Defensive: a malformed/empty response must never crash the render.
+      const list = Array.isArray(data) ? data : [];
+      setContracts(list);
       // Land on whichever stage is currently actionable.
-      const actionable = data.find((c: ContractPreview) => c.unlocked);
+      const actionable = list.find((c: ContractPreview) => c.unlocked);
       if (actionable) setActiveStage(actionable.stage);
     } catch (e: any) {
-      Alert.alert('Could not load contract', e?.message ?? 'Please try again.');
+      setContracts([]);
+      // 403 = signed in as a non-provider account (e.g. staff); the Partner
+      // Agreement only applies to care-professional accounts.
+      setLoadError(
+        e?.status === 403
+          ? 'The Partner Agreement is only available to care professional accounts.'
+          : (e?.message ?? 'Could not load the agreement. Please try again.'),
+      );
     } finally {
       setLoading(false);
     }
@@ -300,6 +311,16 @@ export default function ContractScreen() {
     <SafeAreaView style={styles.container}>
       <Header title="Partner Agreement" showBack />
 
+      {loadError ? (
+        <View style={styles.center}>
+          <Ionicons name="alert-circle-outline" size={40} color={Colors.textTertiary} />
+          <Text style={styles.lockedText}>{loadError}</Text>
+          <TouchableOpacity style={[styles.primaryButton, { marginTop: Spacing.md }]} onPress={load}>
+            <Text style={styles.primaryButtonText}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+      <>
       <View style={styles.tabRow}>
         {[1, 2].map((s) => {
           const stageData = s === 1 ? stage1 : stage2;
@@ -328,7 +349,7 @@ export default function ContractScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.card}>
-            <Text style={styles.contractText}>{current?.rendered_text}</Text>
+            <Text style={styles.contractText}>{current?.rendered_text ?? ''}</Text>
           </View>
 
           {current?.status === 'accepted' ? (
@@ -439,6 +460,8 @@ export default function ContractScreen() {
             </View>
           )}
         </ScrollView>
+      )}
+      </>
       )}
 
       {/* Mock signing modal — only ever shown when the backend returned a
