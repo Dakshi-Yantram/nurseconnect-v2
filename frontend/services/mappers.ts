@@ -78,6 +78,8 @@ export interface BackendBooking {
   assignment_wave?: number | null;
   assignment_escalated_at?: string | null;
   distance_km?: number | null;
+  time_bucket?: 'upcoming' | 'active' | 'past' | null;
+  is_expired?: boolean;
   /**
    * Enrichment the backend adds on the list/detail endpoints. Preferred over
    * client-side lookups — `service_name` in particular is resolved from
@@ -194,6 +196,8 @@ export function mapBooking(
     packageId: b.package_id,
     cancellationReason: b.cancellation_reason,
     acceptedAt: b.accepted_at,
+    timeBucket: b.time_bucket ?? undefined,
+    isExpired: !!b.is_expired,
     // Proximity dispatch surface for the distance chip + Maps deep link.
     distanceKm: typeof b.distance_km === 'number' ? b.distance_km : undefined,
     latitude: b.latitude !== null && b.latitude !== undefined ? toNum(b.latitude) : undefined,
