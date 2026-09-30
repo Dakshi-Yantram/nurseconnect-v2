@@ -132,6 +132,10 @@ export interface Booking {
   packageId?: string | null;
   cancellationReason?: string | null;
   acceptedAt?: string | null;
+  /** Server-computed 'upcoming' | 'active' | 'past'. The backend is the authority on expiry. */
+  timeBucket?: 'upcoming' | 'active' | 'past';
+  /** True when the slot passed and the booking never started. */
+  isExpired?: boolean;
   // Proximity dispatch + Google Maps deep link.
   distanceKm?: number;
   latitude?: number;

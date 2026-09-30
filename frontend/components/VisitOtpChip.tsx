@@ -15,7 +15,9 @@ import type { BookingStatus } from '../types';
  * reads the live one (the endpoint is idempotent and returns the remaining
  * TTL).
  */
-const ELIGIBLE: BookingStatus[] = ['assigned', 'worker_en_route', 'worker_arrived', 'in_progress'];
+// NOT 'in_progress': once the visit has started the code is spent, and asking
+// for it again minted a second 10-minute code + SMS that nothing could use.
+const ELIGIBLE: BookingStatus[] = ['assigned', 'worker_en_route', 'worker_arrived'];
 
 interface Props {
   bookingId: string;
