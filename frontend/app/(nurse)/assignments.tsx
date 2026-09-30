@@ -80,8 +80,8 @@ export default function Assignments() {
   const { upcoming, past } = useMemo(() => {
     const done = ['completed', 'cancelled', 'missed'];
     return {
-      upcoming: assignments.filter((a) => !done.includes(a.rawStatus)),
-      past: assignments.filter((a) => done.includes(a.rawStatus)),
+      upcoming: assignments.filter((a) => !done.includes(a.rawStatus) && a.timeBucket !== 'past'),
+      past: assignments.filter((a) => done.includes(a.rawStatus) || a.timeBucket === 'past'),
     };
   }, [assignments]);
 

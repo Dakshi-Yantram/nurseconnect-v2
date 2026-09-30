@@ -36,12 +36,24 @@ export interface BookingBuckets {
   needsReview: Booking[];
 }
 
+/**
+ * A booking whose slot has passed without starting is NEVER upcoming — the
+ * server sets `timeBucket === 'past'` / `isExpired` (it owns timezone and
+ * slot-boundary rules). It moves to the completed/past list instead of
+ * lingering under Upcoming.
+ */
+function isPastByServer(b: Booking): boolean {
+  return b.timeBucket === 'past' || b.isExpired === true;
+}
+
 export function bucketBookings(bookings: Booking[]): BookingBuckets {
   return {
     all: bookings,
-    upcoming: bookings.filter((b) => UPCOMING.includes(b.rawStatus)),
+    upcoming: bookings.filter((b) => UPCOMING.includes(b.rawStatus) && !isPastByServer(b)),
     inCare: bookings.filter((b) => IN_CARE.includes(b.rawStatus)),
-    completed: bookings.filter((b) => CLOSED.includes(b.rawStatus)),
+    completed: bookings.filter(
+      (b) => CLOSED.includes(b.rawStatus) || (UPCOMING.includes(b.rawStatus) && isPastByServer(b)),
+    ),
     needsReview: bookings.filter((b) => NEEDS_REVIEW.includes(b.rawStatus)),
   };
 }

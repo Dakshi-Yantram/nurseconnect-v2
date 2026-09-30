@@ -182,18 +182,29 @@ export default function NurseVisitScreen() {
     setOtpError('');
     setVerifying(true);
 
-    // Get GPS coordinates — required by backend checkin
-    let latitude = 0;
-    let longitude = 0;
+    // The server verifies the nurse is at the customer's address, so a real,
+    // fresh GPS fix is REQUIRED. Never send 0,0: the old "GPS optional" fallback
+    // now just produces a rejection, so fail early with a clear message.
+    let latitude: number;
+    let longitude: number;
+    let accuracyM: number | undefined;
+    let capturedAt: string;
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        latitude = loc.coords.latitude;
-        longitude = loc.coords.longitude;
+      if (status !== 'granted') {
+        setOtpError('Location permission is required to start the visit. Enable it in Settings and try again.');
+        setVerifying(false);
+        return;
       }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      latitude = loc.coords.latitude;
+      longitude = loc.coords.longitude;
+      accuracyM = typeof loc.coords.accuracy === 'number' ? loc.coords.accuracy : undefined;
+      capturedAt = new Date(loc.timestamp || Date.now()).toISOString();
     } catch {
-      // GPS optional — send 0,0 if unavailable; backend records it
+      setOtpError('Could not get your location. Turn on GPS, move to an open area and try again.');
+      setVerifying(false);
+      return;
     }
 
     try {
@@ -201,6 +212,8 @@ export default function NurseVisitScreen() {
         otp: otp.trim(),
         latitude,
         longitude,
+        accuracy_m: accuracyM,
+        captured_at: capturedAt,
       });
       setVisit(record);
       // Refresh the assignment list so the dashboard and Visits tab reflect
@@ -212,9 +225,12 @@ export default function NurseVisitScreen() {
       }
       setPhase('active');
     } catch (e: any) {
-      const code = e?.detail?.code || e?.code;
+      // api.ts exposes the raw response body as e.detail; FastAPI nests our
+      // {code, message, ...} one level deeper under `detail`.
+      const body = e?.detail?.detail ?? e?.detail ?? {};
+      const code = body?.code || e?.code;
       if (code === 'OTP_INVALID') {
-        const remaining = e?.detail?.attempts_remaining ?? '';
+        const remaining = body?.attempts_remaining ?? '';
         setOtpError(
           `Incorrect code.${remaining ? ` ${remaining} attempt(s) remaining.` : ''}`
         );
@@ -222,6 +238,27 @@ export default function NurseVisitScreen() {
         setOtpError('This code has expired. Ask the consumer to generate a new one.');
       } else if (code === 'OTP_MAX_ATTEMPTS_EXCEEDED') {
         setOtpError('Too many incorrect attempts. Ask the consumer to generate a new code.');
+      } else if (code === 'NOT_AT_CUSTOMER_LOCATION') {
+        // Keep the code: nothing was wrong with it, the nurse just isn't there yet.
+        setOtpError(body?.message || "You're not at the customer's address yet.");
+        setVerifying(false);
+        return;
+      } else if (
+        [
+          'NURSE_LOCATION_REQUIRED',
+          'NURSE_LOCATION_STALE',
+          'NURSE_LOCATION_INACCURATE',
+          'LOCATION_MISMATCH',
+          'CUSTOMER_LOCATION_UNAVAILABLE',
+          'VISIT_NOT_EN_ROUTE',
+          'VISIT_ALREADY_STARTED',
+          'VISIT_NOT_ACTIVE',
+        ].includes(code)
+      ) {
+        setOtpError(body?.message || e?.message || 'Could not start the visit.');
+        setVerifying(false);
+        if (code === 'VISIT_ALREADY_STARTED') loadVisit();
+        return;
       } else {
         setOtpError(e?.message || 'Could not verify code. Please try again.');
       }
