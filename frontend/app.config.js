@@ -159,11 +159,11 @@ module.exports = () => ({
     ],
 
     experiments: { typedRoutes: true },
-    owner: 'dakshi123',
+    owner: 'yantram1',
 
     extra: {
       router: {},
-      eas: { projectId: 'da0cbe47-ab8e-43f9-966f-d4b83bb90e3b' },
+      eas: { projectId: 'da7f8316-ba9e-4657-9727-99cfde218f97' },
       firebaseConfigured: firebaseReady,
     },
   },
