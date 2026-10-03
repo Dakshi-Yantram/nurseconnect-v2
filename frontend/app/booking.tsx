@@ -198,6 +198,25 @@ export default function BookingScreen() {
       ]);
       return false;
     }
+    // The backend refuses a booking without real coordinates (no nurse could
+    // ever be matched), so stop here with a clear way forward.
+    const lat = selectedAddress?.latitude;
+    const lng = selectedAddress?.longitude;
+    if (
+      lat == null ||
+      lng == null ||
+      (Math.abs(Number(lat)) < 1e-6 && Math.abs(Number(lng)) < 1e-6)
+    ) {
+      Alert.alert(
+        'Location needed',
+        "We couldn't find the location of this address. Open Addresses, tap 'Use my current location' (or re-save it with the correct pincode and city), then try again.",
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Fix address', onPress: () => router.push('/addresses') },
+        ],
+      );
+      return false;
+    }
     return true;
   };
 
