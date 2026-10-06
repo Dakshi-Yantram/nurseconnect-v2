@@ -45,6 +45,11 @@ import {
 import { mapBooking } from '../services/mappers';
 import { formatDay, formatTime, humanize, inr } from '../lib/format';
 import type { Booking } from '../types';
+import { MaterialsChecklist, allMaterialsChecked } from '../components/MaterialsChecklist';
+import {
+  packageMaterialsService,
+  type PackageMaterial,
+} from '../services/package-materials.service';
 
 export default function Payment() {
   const router = useRouter();
@@ -78,6 +83,13 @@ export default function Payment() {
     },
   ]);
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethodId>('razorpay');
+
+  // Materials checklist — 2nd confirmation (1st was on the booking screen).
+  // Starts unticked on purpose: the patient re-checks the list before paying.
+  const [materials, setMaterials] = useState<PackageMaterial[]>([]);
+  const [matChecked, setMatChecked] = useState<Record<string, boolean>>({});
+  const [bookingAckDone, setBookingAckDone] = useState(true);
+  const materialsOk = materials.length === 0 || allMaterialsChecked(materials, matChecked);
 
   // Synchronous re-entry guard. `processing` alone is not enough: React state
   // updates are async, so rapid taps (or a duplicate gateway callback) could
@@ -126,6 +138,16 @@ export default function Payment() {
                 router.replace({ pathname: '/visit/[id]', params: { id: mapped.id } }),
             },
           ]);
+        }
+        // Materials checklist (staging feature; null/[] => nothing to show).
+        try {
+          const bm = await packageMaterialsService.getForBooking(bookingId);
+          if (!cancelled && bm && bm.materials.length && !mapped.paid) {
+            setMaterials(bm.materials);
+            setBookingAckDone(!!bm.acks?.booking);
+          }
+        } catch {
+          // best-effort; backend still enforces the gate on /payments/order
         }
         // Which methods this booking may use. Best-effort: on failure we
         // keep the online-only fallback rather than blocking checkout.
@@ -185,11 +207,34 @@ export default function Payment() {
     [booking, verifyPayment, reconcilePayment, router],
   );
 
+  /** Save the payment-stage confirmation (and the booking-stage one if the
+   *  booking screen's save didn't go through). Returns false if blocked. */
+  const confirmMaterials = async (): Promise<boolean> => {
+    if (!booking || materials.length === 0) return true;
+    if (!materialsOk) {
+      Alert.alert(
+        'Confirm the materials',
+        'Please tick every item in “Materials the nurse will bring” before paying.',
+      );
+      return false;
+    }
+    if (!bookingAckDone) {
+      await packageMaterialsService.ack(booking.id, 'booking', matChecked);
+      setBookingAckDone(true);
+    }
+    await packageMaterialsService.ack(booking.id, 'payment', matChecked);
+    return true;
+  };
+
   const pay = async () => {
     if (!booking || payInFlight.current) return;
     payInFlight.current = true;
     setProcessing(true);
     try {
+      if (!(await confirmMaterials())) {
+        payInFlight.current = false;
+        return;
+      }
       const created = await initiatePayment(booking.id);
       setOrder(created);
 
@@ -228,6 +273,10 @@ export default function Payment() {
     payInFlight.current = true;
     setProcessing(true);
     try {
+      if (!(await confirmMaterials())) {
+        payInFlight.current = false;
+        return;
+      }
       await selectCashPayment(booking.id);
       router.replace({
         pathname: '/payment-success',
@@ -370,6 +419,14 @@ export default function Payment() {
           </View>
         )}
 
+        <MaterialsChecklist
+          materials={materials}
+          checked={matChecked}
+          onChange={setMatChecked}
+          subtitle="Please confirm the list once more before payment."
+          testID="payment-materials"
+        />
+
         <View style={styles.noticeCard}>
           <Ionicons name="information-circle" size={18} color={Colors.primary} />
           <Text style={styles.noticeTxt}>
@@ -429,6 +486,7 @@ export default function Payment() {
               : `Pay ${inr(booking.netCost)}`
           }
           loading={processing}
+          disabled={!materialsOk}
           onPress={selectedMethod === 'cash' ? payWithCash : pay}
           testID="pay-btn"
         />

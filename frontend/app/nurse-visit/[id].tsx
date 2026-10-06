@@ -55,6 +55,11 @@ import { useStore } from '../../store';
 import { callManager } from '../../lib/call-manager';
 import { SUPPLY_CONFIRMATION_ITEMS } from '../../services/composite-care.service';
 import { inr } from '../../lib/format';
+import { MaterialsChecklist } from '../../components/MaterialsChecklist';
+import {
+  packageMaterialsService,
+  type PackageMaterial,
+} from '../../services/package-materials.service';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface VisitRecord {
@@ -103,6 +108,22 @@ export default function NurseVisitScreen() {
   const booking = assignments.find((a) => a.id === bookingId);
   const collectCash = useStore((s) => s.collectCashAPI);
   const [collectingCash, setCollectingCash] = useState(false);
+
+  // Materials to carry for this package (staging feature; [] when off).
+  const [materials, setMaterials] = useState<PackageMaterial[]>([]);
+  useEffect(() => {
+    if (!bookingId) return;
+    let cancelled = false;
+    packageMaterialsService
+      .getForBooking(bookingId)
+      .then((bm) => {
+        if (!cancelled && bm) setMaterials(bm.materials);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId]);
 
   // Cash is only due when the customer chose it AND it hasn't been taken
   // yet. Driven by the booking's own payment state rather than a role
@@ -386,6 +407,15 @@ export default function NurseVisitScreen() {
                 <Text style={styles.bookingAddress}>{booking.address ?? ''}</Text>
               </View>
             )}
+
+            {/* Materials the nurse must carry for this package. */}
+            <MaterialsChecklist
+              materials={materials}
+              readOnly
+              title="Materials to bring"
+              subtitle="The family confirmed this list at booking and again at payment."
+              testID="nurse-materials"
+            />
 
             {/* Patient's own supplies (Workflow 2) — check BEFORE travelling,
                 not after arriving, so a missing/expired item doesn't waste
