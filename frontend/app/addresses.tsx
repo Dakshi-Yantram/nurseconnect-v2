@@ -51,6 +51,51 @@ const EMPTY_FORM: AddressInput = {
   recipient_phone: '',
 };
 
+
+/**
+ * A typed address has no GPS fix, but dispatch needs real coordinates (the
+ * backend refuses 0/0 or missing ones). Resolve them from the full typed text
+ * only. A pincode-only guess is deliberately NOT used: it lands on the pincode
+ * centre, often kilometres from the door, and the nurse's start-visit check
+ * (VISIT_START_RADIUS_M = 150 m) would then reject her at the right house.
+ * Returns null when the device geocoder cannot place the address.
+ */
+async function geocodeTypedAddress(
+  f: AddressInput,
+): Promise<{ lat: number; lng: number } | null> {
+  const query = [f.line1, f.line2, f.landmark, f.city, f.state, f.pincode, 'India']
+    .filter((p) => p && String(p).trim())
+    .join(', ');
+  if (!f.pincode?.trim() || !query) return null;
+  try {
+    const hit = (await Location.geocodeAsync(query))?.[0];
+    if (
+      hit &&
+      Number.isFinite(hit.latitude) &&
+      Number.isFinite(hit.longitude) &&
+      !(Math.abs(hit.latitude) < 1e-6 && Math.abs(hit.longitude) < 1e-6)
+    ) {
+      return { lat: hit.latitude, lng: hit.longitude };
+    }
+  } catch {
+    // geocoder unavailable (no Google Play services, offline): fall through
+  }
+  return null;
+}
+
+const confirmSaveWithoutLocation = () =>
+  new Promise<boolean>((resolve) =>
+    Alert.alert(
+      "We couldn't find this location",
+      "Without a location we can't match a nurse to this address, so booking with it will fail. Tap 'Use my current location' while you are at the address, or check the pincode and city.",
+      [
+        { text: 'Edit address', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Save anyway', onPress: () => resolve(true) },
+      ],
+      { cancelable: false },
+    ),
+  );
+
 export default function Addresses() {
   const addresses = useStore((s) => s.addresses);
   const state = useStore((s) => s.loadState.addresses);
@@ -143,13 +188,23 @@ export default function Addresses() {
     }
     setSaving(true);
     try {
+      // Typed address with no GPS fix: work the coordinates out from the text.
+      let finalCoords = coords;
+      if (!finalCoords) {
+        finalCoords = await geocodeTypedAddress(form);
+        if (finalCoords) {
+          setCoords(finalCoords);
+        } else if (!(await confirmSaveWithoutLocation())) {
+          return;
+        }
+      }
       const payload: AddressInput = {
         ...form,
         recipient_phone: form.recipient_phone?.trim()
           ? normalizePhone(form.recipient_phone)
           : form.recipient_phone,
-        latitude: coords?.lat ?? null,
-        longitude: coords?.lng ?? null,
+        latitude: finalCoords?.lat ?? null,
+        longitude: finalCoords?.lng ?? null,
       };
       if (editing) {
         await addressesService.update(editing.id, payload);

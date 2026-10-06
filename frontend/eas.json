@@ -38,6 +38,15 @@
       "android": {
         "buildType": "apk"
       }
+    },
+    "staging-apk": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://see-resist-teams-integral.trycloudflare.com"
+      }
     }
   },
   "submit": {
