@@ -183,6 +183,7 @@ const GroupCard: React.FC<{
       pkg={current.pkg}
       onPress={() => onChoose(current.pkg)}
       selector={selector}
+      title={group.title || undefined}
     />
   );
 };
@@ -198,7 +199,9 @@ const PackageCard: React.FC<{
   onPress: () => void;
   /** Optional dropdown rendered under the title (grouped packages). */
   selector?: React.ReactNode;
-}> = ({ pkg, onPress, selector }) => {
+  /** Group heading for dropdown cards (generic; the chosen variant is in the dropdown). */
+  title?: string;
+}> = ({ pkg, onPress, selector, title }) => {
   const [expanded, setExpanded] = useState(false);
 
   // Package price is the headline where one is set; otherwise it's billed per
@@ -219,7 +222,7 @@ const PackageCard: React.FC<{
           <Ionicons name="medkit" size={22} color={Colors.primary} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.name}>{pkg.name}</Text>
+          <Text style={styles.name}>{title || pkg.name}</Text>
           {!!pkg.tagline && <Text style={styles.tagline}>{pkg.tagline}</Text>}
         </View>
       </View>

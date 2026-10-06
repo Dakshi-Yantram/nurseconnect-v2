@@ -30,6 +30,8 @@ export interface GroupedOption {
 export interface PackageGroup {
   type: 'dropdown' | 'single';
   heading: string;
+  /** Card heading for a dropdown group (no duration/variant in it). */
+  title?: string;
   category: string | null;
   options: GroupedOption[];
 }
