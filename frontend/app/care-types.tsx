@@ -25,6 +25,10 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme
 import { useStore } from '../store';
 import { inr, humanize } from '../lib/format';
 import type { CarePackageOut } from '../services/catalog.service';
+import {
+  packageMaterialsService,
+  type PackageGroup,
+} from '../services/package-materials.service';
 
 export default function CareTypes() {
   const router = useRouter();
@@ -32,18 +36,30 @@ export default function CareTypes() {
   const state = useStore((s) => s.loadState.packages);
   const loadPackages = useStore((s) => s.loadPackages);
   const [refreshing, setRefreshing] = useState(false);
+  // Grouped catalogue (dropdowns). null = backend doesn't have the feature
+  // (production) -> render the old flat list exactly as before.
+  const [groups, setGroups] = useState<PackageGroup[] | null>(null);
+
+  const loadGroups = useCallback(async () => {
+    try {
+      setGroups(await packageMaterialsService.listGrouped());
+    } catch {
+      setGroups(null);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       loadPackages().catch(() => {});
-    }, [loadPackages]),
+      loadGroups();
+    }, [loadPackages, loadGroups]),
   );
 
   const active = useMemo(() => packages.filter((p) => p.is_active), [packages]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadPackages().catch(() => {});
+    await Promise.all([loadPackages().catch(() => {}), loadGroups()]);
     setRefreshing(false);
   };
 
@@ -73,9 +89,18 @@ export default function CareTypes() {
             is confirmed.
           </Text>
 
-          {active.map((pkg) => (
-            <PackageCard key={pkg.id} pkg={pkg} onPress={() => choose(pkg)} />
-          ))}
+          {groups
+            ? groups.map((g) => (
+                <GroupCard
+                  key={`${g.type}:${g.heading}:${g.options[0]?.id}`}
+                  group={g}
+                  packages={active}
+                  onChoose={choose}
+                />
+              ))
+            : active.map((pkg) => (
+                <PackageCard key={pkg.id} pkg={pkg} onPress={() => choose(pkg)} />
+              ))}
         </ScrollView>
       </AsyncBoundary>
     </SafeAreaView>
@@ -83,12 +108,100 @@ export default function CareTypes() {
 }
 
 /**
+ * Similar packages (same Dropdown Heading in the catalogue sheet, e.g.
+ * "Nursing Shift Duration": 4h / 8h / 12h Day …) render as ONE card with an
+ * inline dropdown. Picking an option swaps the card to that package's price
+ * and details; "Book" books the selected option.
+ */
+const GroupCard: React.FC<{
+  group: PackageGroup;
+  packages: CarePackageOut[];
+  onChoose: (pkg: CarePackageOut) => void;
+}> = ({ group, packages, onChoose }) => {
+  // Only options the store also has (active + full details) are bookable.
+  const options = group.options
+    .map((o) => ({ o, pkg: packages.find((p) => p.id === o.id) }))
+    .filter((x): x is { o: PackageGroup['options'][number]; pkg: CarePackageOut } => !!x.pkg);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  if (options.length === 0) return null;
+
+  const current = options.find((x) => x.o.id === selectedId) ?? options[0];
+
+  if (group.type !== 'dropdown' || options.length === 1) {
+    return <PackageCard pkg={current.pkg} onPress={() => onChoose(current.pkg)} />;
+  }
+
+  const selector = (
+    <View style={styles.ddWrap}>
+      <TouchableOpacity
+        style={[styles.ddBox, open && styles.ddBoxOpen]}
+        activeOpacity={0.8}
+        onPress={() => setOpen((v) => !v)}
+        testID={`group-${group.heading}-dropdown`}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.ddLabel}>{group.heading}</Text>
+          <Text style={styles.ddValue}>{current.o.dropdown_option || current.pkg.name}</Text>
+        </View>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.primary} />
+      </TouchableOpacity>
+      {open && (
+        <View style={styles.ddList}>
+          {options.map(({ o, pkg }) => {
+            const sel = o.id === current.o.id;
+            const pp = parseFloat(pkg.package_price ?? '');
+            const pv = parseFloat(pkg.per_visit_price ?? '');
+            const price = !isNaN(pp) && pp > 0 ? pp : pv;
+            return (
+              <TouchableOpacity
+                key={o.id}
+                style={[styles.ddItem, sel && styles.ddItemOn]}
+                onPress={() => {
+                  setSelectedId(o.id);
+                  setOpen(false);
+                }}
+                testID={`group-option-${o.id}`}
+              >
+                <Ionicons
+                  name={sel ? 'radio-button-on' : 'radio-button-off'}
+                  size={18}
+                  color={sel ? Colors.primary : Colors.textTertiary}
+                />
+                <Text style={styles.ddItemTxt}>{o.dropdown_option || pkg.name}</Text>
+                {!isNaN(price) && price > 0 && <Text style={styles.ddItemPrice}>{inr(price)}</Text>}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <PackageCard
+      pkg={current.pkg}
+      onPress={() => onChoose(current.pkg)}
+      selector={selector}
+      title={group.title || undefined}
+    />
+  );
+};
+
+/**
  * Collapsed card answers "what is this and is it relevant to me?"; tapping
  * "View details" expands the SAME card inline (not a new screen) to answer
  * "exactly what am I getting if I book this?". "Book" always sits next to
  * the toggle so booking never requires opening details first.
  */
-const PackageCard: React.FC<{ pkg: CarePackageOut; onPress: () => void }> = ({ pkg, onPress }) => {
+const PackageCard: React.FC<{
+  pkg: CarePackageOut;
+  onPress: () => void;
+  /** Optional dropdown rendered under the title (grouped packages). */
+  selector?: React.ReactNode;
+  /** Group heading for dropdown cards (generic; the chosen variant is in the dropdown). */
+  title?: string;
+}> = ({ pkg, onPress, selector, title }) => {
   const [expanded, setExpanded] = useState(false);
 
   // Package price is the headline where one is set; otherwise it's billed per
@@ -109,10 +222,12 @@ const PackageCard: React.FC<{ pkg: CarePackageOut; onPress: () => void }> = ({ p
           <Ionicons name="medkit" size={22} color={Colors.primary} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={styles.name}>{pkg.name}</Text>
+          <Text style={styles.name}>{title || pkg.name}</Text>
           {!!pkg.tagline && <Text style={styles.tagline}>{pkg.tagline}</Text>}
         </View>
       </View>
+
+      {selector}
 
       {!!pkg.description && (
         <Text style={styles.desc} numberOfLines={expanded ? undefined : 3}>
@@ -289,4 +404,39 @@ const styles = StyleSheet.create({
   bulletRow: { flexDirection: 'row', marginBottom: 3 },
   bulletDot: { ...Typography.small, color: Colors.textSecondary, marginRight: 6 },
   bulletTxt: { ...Typography.small, color: Colors.textSecondary, lineHeight: 19, flex: 1 },
+  // Grouped-package dropdown (same palette as the booking screen selectors).
+  ddWrap: { marginTop: 12 },
+  ddBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: Colors.surface,
+  },
+  ddBoxOpen: { borderColor: Colors.primary, backgroundColor: '#EFF6FF' },
+  ddLabel: { ...Typography.caption, color: Colors.textTertiary, fontWeight: '600' as const },
+  ddValue: { ...Typography.bodyBold, color: Colors.textPrimary, fontSize: 15, marginTop: 2 },
+  ddList: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
+  ddItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.divider,
+    backgroundColor: Colors.surface,
+  },
+  ddItemOn: { backgroundColor: '#EFF6FF' },
+  ddItemTxt: { ...Typography.body, color: Colors.textPrimary, flex: 1 },
+  ddItemPrice: { ...Typography.small, color: Colors.primary, fontWeight: '700' as const },
 });
