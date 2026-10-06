@@ -33,6 +33,11 @@ import { Colors, Radius, Shadows, Spacing, Typography } from '../constants/theme
 import { useStore } from '../store';
 import { formatAddress } from '../services/addresses.service';
 import { inr, to24HourTime } from '../lib/format';
+import { MaterialsChecklist, allMaterialsChecked } from '../components/MaterialsChecklist';
+import {
+  packageMaterialsService,
+  type PackageMaterial,
+} from '../services/package-materials.service';
 
 /**
  * 30-minute slots from 8:00 AM to 8:00 PM. Previously these jumped in
@@ -137,6 +142,39 @@ export default function BookingScreen() {
   const [isUrgent, setIsUrgent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [gateOpen, setGateOpen] = useState(false);
+  // Materials checklist (1st of 2 confirmations; the 2nd is on /payment).
+  const [materials, setMaterials] = useState<PackageMaterial[]>([]);
+  const [matChecked, setMatChecked] = useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setMaterials([]);
+    setMatChecked({});
+    if (!packageId) return;
+    packageMaterialsService
+      .listForPackage(packageId)
+      .then((list) => {
+        if (!cancelled) setMaterials(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [packageId]);
+
+  const needsMaterials = materials.length > 0;
+  const materialsOk = !needsMaterials || allMaterialsChecked(materials, matChecked);
+
+  /** Save the booking-stage confirmation. Never blocks navigation: if it
+   *  fails, the payment screen re-sends it before the payment-stage one. */
+  const ackBookingMaterials = async (bookingId: string) => {
+    if (!needsMaterials) return;
+    try {
+      await packageMaterialsService.ack(bookingId, 'booking', matChecked);
+    } catch {
+      // handled on /payment
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -198,22 +236,10 @@ export default function BookingScreen() {
       ]);
       return false;
     }
-    // The backend refuses a booking without real coordinates (no nurse could
-    // ever be matched), so stop here with a clear way forward.
-    const lat = selectedAddress?.latitude;
-    const lng = selectedAddress?.longitude;
-    if (
-      lat == null ||
-      lng == null ||
-      (Math.abs(Number(lat)) < 1e-6 && Math.abs(Number(lng)) < 1e-6)
-    ) {
+    if (!materialsOk) {
       Alert.alert(
-        'Location needed',
-        "We couldn't find the location of this address. Open Addresses, tap 'Use my current location' (or re-save it with the correct pincode and city), then try again.",
-        [
-          { text: 'Not now', style: 'cancel' },
-          { text: 'Fix address', onPress: () => router.push('/addresses') },
-        ],
+        'Confirm the materials',
+        'Please tick every item in “Materials the nurse will bring” to continue.',
       );
       return false;
     }
@@ -257,6 +283,7 @@ export default function BookingScreen() {
           })
         : await compositeCareService.createBooking(common);
       setGateOpen(false);
+      await ackBookingMaterials(created.id);
       router.replace({ pathname: '/payment', params: { bookingId: created.id } });
     } catch (e: any) {
       const detail = e?.detail?.detail ?? e?.detail;
@@ -288,6 +315,7 @@ export default function BookingScreen() {
         address_id: effectiveAddressId,
         special_instructions: notes.trim() || undefined,
       });
+      await ackBookingMaterials(created.id);
       router.replace({ pathname: '/payment', params: { bookingId: created.id } });
     } catch (e: any) {
       const detail = e?.detail?.detail ?? e?.detail;
@@ -468,6 +496,15 @@ export default function BookingScreen() {
           numberOfLines={3}
           style={{ minHeight: 80, textAlignVertical: 'top' }}
           testID="booking-notes"
+        />
+
+        {/* ------------------------------------------------ materials --- */}
+        <MaterialsChecklist
+          materials={materials}
+          checked={matChecked}
+          onChange={setMatChecked}
+          subtitle="Please check each item. You’ll confirm this list once more before payment."
+          testID="booking-materials"
         />
 
         {/* --------------------------------------------------- summary --- */}

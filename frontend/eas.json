@@ -39,12 +39,11 @@
         "buildType": "apk"
       }
     },
-    "staging": {
+    "staging-apk": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
-      "credentialsSource": "remote",
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://see-resist-teams-integral.trycloudflare.com"
       }
