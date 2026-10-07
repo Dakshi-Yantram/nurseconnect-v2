@@ -23,6 +23,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -51,6 +52,7 @@ export default function VisitReport() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
 
   const [careNotes, setCareNotes] = useState('');
@@ -113,6 +115,19 @@ export default function VisitReport() {
     }
   };
 
+  const downloadReport = async () => {
+    setDownloading(true);
+    try {
+      const r = await visitsService.getReportPdfLink(bookingId, 'worker');
+      await Linking.openURL(r.pdf_url);
+    } catch (e: any) {
+      const detail = e?.detail?.detail ?? e?.detail;
+      Alert.alert('Could not download report', detail?.message || e?.message || 'Please try again.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -148,7 +163,7 @@ export default function VisitReport() {
             />
             <Text style={styles.bannerTxt}>
               {completed
-                ? 'This visit is complete. You can still correct your report — edits are recorded.'
+                ? 'This visit is complete. The report is final and can no longer be edited. You can download a copy.'
                 : 'Fill this in before you complete the visit. The family sees the summary; the notes stay on the clinical record.'}
             </Text>
           </View>
@@ -166,6 +181,7 @@ export default function VisitReport() {
               placeholder="e.g. Dressing changed on left forearm, wound clean, no discharge…"
               placeholderTextColor={Colors.textTertiary}
               value={careNotes}
+              editable={!completed}
               onChangeText={setCareNotes}
               testID="report-care-notes"
             />
@@ -184,6 +200,7 @@ export default function VisitReport() {
               placeholder="e.g. Amma's dressing was changed today. The wound is healing well…"
               placeholderTextColor={Colors.textTertiary}
               value={familySummary}
+              editable={!completed}
               onChangeText={setFamilySummary}
               testID="report-family-summary"
             />
@@ -201,13 +218,23 @@ export default function VisitReport() {
             </View>
           )}
 
-          <GradientButton
-            title={completed ? 'Save changes' : 'Save report'}
-            onPress={() => save(!completed)}
-            loading={saving}
-            style={{ marginTop: Spacing.md }}
-            testID="report-save"
-          />
+          {completed ? (
+            <GradientButton
+              title="Download report"
+              onPress={downloadReport}
+              loading={downloading}
+              style={{ marginTop: Spacing.md }}
+              testID="report-download"
+            />
+          ) : (
+            <GradientButton
+              title="Save report"
+              onPress={() => save(true)}
+              loading={saving}
+              style={{ marginTop: Spacing.md }}
+              testID="report-save"
+            />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

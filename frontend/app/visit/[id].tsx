@@ -38,6 +38,7 @@ import {
   isTerminal,
 } from '../../lib/booking-domain';
 import { formatDay, formatTime, inr } from '../../lib/format';
+import { Linking } from 'react-native';
 import { callManager } from '../../lib/call-manager';
 import type { Booking } from '../../types';
 
@@ -57,6 +58,7 @@ export default function BookingDetail() {
   const [loading, setLoading] = useState(!storeBooking);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const resolveTitle = useCallback(
@@ -340,6 +342,24 @@ export default function BookingDetail() {
                 <Text style={styles.reportBody}>{visit.care_notes}</Text>
               </>
             )}
+            <GradientButton
+              title="Download report (PDF)"
+              loading={downloadingReport}
+              onPress={async () => {
+                setDownloadingReport(true);
+                try {
+                  const r = await visitsService.getReportPdfLink(booking.id, 'consumer');
+                  await Linking.openURL(r.pdf_url);
+                } catch (e: any) {
+                  const d = e?.detail?.detail ?? e?.detail;
+                  Alert.alert('Could not download report', d?.message || e?.message || 'Please try again.');
+                } finally {
+                  setDownloadingReport(false);
+                }
+              }}
+              style={{ marginTop: Spacing.md }}
+              testID="download-report"
+            />
             <TouchableOpacity
               style={styles.rateRow}
               onPress={() =>
