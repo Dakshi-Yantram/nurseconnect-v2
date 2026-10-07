@@ -274,6 +274,13 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
               {phase === 'round-done' && <Text style={styles.waitTxt}>Nice tap!</Text>}
               {phase === 'target' && (
                 <Animated.View
+                  // Start the clock when the circle is actually laid out on
+                  // screen, not when we asked React to render it. On slower
+                  // phones the render takes 100-200ms and was being counted
+                  // as the nurse's reaction time.
+                  onLayout={() => {
+                    shownAt.current = Date.now();
+                  }}
                   style={[styles.targetBtn, { top: targetPos.top, left: targetPos.left, transform: [{ scale }] }]}
                 >
                   <TouchableOpacity style={styles.targetTouchable} onPressIn={onTargetTap} testID="safety-check-target">
