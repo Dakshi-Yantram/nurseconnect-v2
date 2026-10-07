@@ -413,7 +413,7 @@ const VisitRow: React.FC<{
             }}
             testID={`visit-report-${booking.id}`}
           >
-            <Text style={styles.payoutLink}>View or edit your visit report →</Text>
+            <Text style={styles.payoutLink}>View or download your visit report →</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={(e) => {

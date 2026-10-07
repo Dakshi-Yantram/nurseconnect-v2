@@ -54,6 +54,8 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
   const [failMessage, setFailMessage] = useState<string | null>(null);
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [passedCheck, setPassedCheck] = useState(false);
+  // true when the failure is a technical problem (server/network), not a failed test
+  const [technicalError, setTechnicalError] = useState(false);
 
   const shownAt = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,6 +78,7 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     setFailMessage(null);
     setWarningMessage(null);
     setPassedCheck(false);
+    setTechnicalError(false);
   }, []);
 
   useEffect(() => {
@@ -167,20 +170,16 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
         );
         setPhase('fail');
       }
-    } catch {
-      // Fall back to the local estimate if the network call itself failed —
-      // still require a retry through the server before allowing "Confirm".
-      const tier = localTier(finalTimes, finalFalseStarts);
-      if (tier === 'pass') {
-        setPassedCheck(true);
-        setPhase('declaration');
-      } else if (tier === 'warning') {
-        setWarningMessage('Your reaction time is a little slow. Take a breather and try once more.');
-        setPhase('warning');
-      } else {
-        setFailMessage('Could not confirm your alertness check. Please try again.');
-        setPhase('fail');
-      }
+    } catch (e: any) {
+      // The server call itself failed (network / 5xx / 4xx). Do NOT tell the
+      // nurse she is too tired — that was a technical problem, not a result.
+      // Show the real reason and let her simply run the check again.
+      const status = e?.status ? ` (code ${e.status})` : '';
+      setTechnicalError(true);
+      setFailMessage(
+        `We could not save your safety check${status}. ${e?.message || ''} Please check your internet and try again.`.trim(),
+      );
+      setPhase('fail');
     } finally {
       setSubmitting(false);
     }
@@ -202,18 +201,23 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
       await bookingsService.markEnRoute(bookingId);
       onEnRouteConfirmed();
     } catch (e: any) {
-      const code = e?.detail?.code;
+      // FastAPI wraps errors as { detail: { code, message } }
+      const d = e?.detail?.detail ?? e?.detail;
+      const code = d?.code;
       if (code === 'SAFETY_CHECK_WARNING') {
         setWarningMessage('Your reaction time is a little slow. Take a breather and try once more.');
         setPhase('warning');
       } else if (code === 'SAFETY_CHECK_FAILED') {
         setFailMessage(
-          e?.detail?.message ||
+          d?.message ||
             'You seem very fatigued right now — this booking has been reassigned so you can rest.',
         );
         setPhase('fail');
       } else {
-        setFailMessage(e?.message || 'Could not start the journey. Please try again.');
+        setTechnicalError(true);
+        setFailMessage(
+          `${d?.message || e?.message || 'Could not start the journey.'}${e?.status ? ` (code ${e.status})` : ''} Please try again.`,
+        );
         setPhase('fail');
       }
     } finally {
@@ -300,9 +304,26 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
 
           {phase === 'fail' && (
             <View style={styles.centerBlock} testID="safety-check-fail">
-              <Ionicons name="bed-outline" size={44} color={Colors.danger} />
-              <Text style={styles.resultTitle}>Time to rest</Text>
+              <Ionicons
+                name={technicalError ? 'cloud-offline-outline' : 'bed-outline'}
+                size={44}
+                color={Colors.danger}
+              />
+              <Text style={styles.resultTitle}>{technicalError ? 'Something went wrong' : 'Time to rest'}</Text>
               <Text style={styles.bodyTxt}>{failMessage}</Text>
+              {technicalError && (
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={() => {
+                    setTechnicalError(false);
+                    setFailMessage(null);
+                    startGame();
+                  }}
+                  testID="safety-check-error-retry"
+                >
+                  <Text style={styles.primaryBtnTxt}>Try again</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: Colors.textSecondary }]} onPress={onClose} testID="safety-check-dismiss">
                 <Text style={styles.primaryBtnTxt}>Close</Text>
               </TouchableOpacity>
