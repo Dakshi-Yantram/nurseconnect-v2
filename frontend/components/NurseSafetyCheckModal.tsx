@@ -103,9 +103,11 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     timerRef.current = setTimeout(() => {
       placeTargetRandomly();
       shownAt.current = Date.now();
-      scale.setValue(0);
+      // Show the target at full size immediately. It used to grow from 0 with
+      // a spring animation, so the first ~150ms it was too small to hit and
+      // that time was being counted as the nurse's reaction time.
+      scale.setValue(1);
       setPhase('target');
-      Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 5 }).start();
     }, delay);
   };
 
@@ -274,7 +276,7 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
                 <Animated.View
                   style={[styles.targetBtn, { top: targetPos.top, left: targetPos.left, transform: [{ scale }] }]}
                 >
-                  <TouchableOpacity style={styles.targetTouchable} onPress={onTargetTap} testID="safety-check-target">
+                  <TouchableOpacity style={styles.targetTouchable} onPressIn={onTargetTap} testID="safety-check-target">
                     <Ionicons name="checkmark" size={30} color="#fff" />
                   </TouchableOpacity>
                 </Animated.View>
@@ -311,6 +313,11 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
               />
               <Text style={styles.resultTitle}>{technicalError ? 'Something went wrong' : 'Time to rest'}</Text>
               <Text style={styles.bodyTxt}>{failMessage}</Text>
+              {!technicalError && times.length > 0 && (
+                <Text style={[styles.bodyTxt, { color: Colors.textTertiary }]}>
+                  Your average reaction time: {average}ms · false taps: {falseStarts}
+                </Text>
+              )}
               {technicalError && (
                 <TouchableOpacity
                   style={styles.primaryBtn}
