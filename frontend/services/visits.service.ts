@@ -163,6 +163,18 @@ export const visitsService = {
     payload: { care_notes?: string; family_summary?: string },
   ) => api.put<VisitReportOut>(`/visits/${bookingId}/report`, payload),
 
+  /**
+   * One-time (60s) PDF link for a completed visit. `view` picks the nurse copy
+   * (includes clinical notes) or the family copy (never includes them).
+   * Open `pdf_url` in the browser; request a fresh link on every tap.
+   */
+  getReportPdfLink: (bookingId: string, view: 'worker' | 'consumer') =>
+    api.get<{ pdf_url: string; download_path: string; expires_in_seconds: number }>(
+      view === 'worker'
+        ? `/visits/${bookingId}/report/pdf`
+        : `/visits/${bookingId}/report/consumer/pdf`,
+    ),
+
   /** Patient / family: read the finished report for a completed visit. */
   getConsumerReport: (bookingId: string) =>
     api.get<ConsumerVisitReportOut>(`/visits/${bookingId}/report/consumer`),

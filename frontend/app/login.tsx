@@ -77,6 +77,12 @@ export default function Login() {
   const [regPhone, setRegPhone] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [workerType, setWorkerType] = useState<ProviderType>('nurse');
+  // register: mobile OTP (care professionals only)
+  const [regOtp, setRegOtp] = useState('');
+  const [regOtpSent, setRegOtpSent] = useState(false);
+  const [regPhoneVerified, setRegPhoneVerified] = useState(false);
+  const [regResendIn, setRegResendIn] = useState(0);
+  const needsPhoneOtp = entry === 'nurse';
 
   // verify email
   const [verifyEmail, setVerifyEmail] = useState('');
@@ -92,6 +98,19 @@ export default function Login() {
     const t = setTimeout(() => setResendIn((s) => s - 1), 1000);
     return () => clearTimeout(t);
   }, [resendIn]);
+
+  useEffect(() => {
+    if (regResendIn <= 0) return;
+    const t = setTimeout(() => setRegResendIn((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [regResendIn]);
+
+  const resetRegPhoneOtp = () => {
+    setRegOtp('');
+    setRegOtpSent(false);
+    setRegPhoneVerified(false);
+    setRegResendIn(0);
+  };
 
   const clearMessages = () => {
     setError('');
@@ -174,8 +193,51 @@ export default function Login() {
     }
   };
 
+  const regPhoneValid = () => /^[6-9]\d{9}$/.test(regPhone.replace(/[\s-]/g, ''));
+
+  const doSendRegOtp = async (forceResend = false) => {
+    clearMessages();
+    if (!regPhoneValid()) return setError('Enter a valid 10-digit Indian mobile number');
+    setBusy(true);
+    try {
+      const res = await authService.sendOtp(regPhone, 'signup', forceResend, 'worker');
+      setRegOtp(__DEV__ ? (res.dev_otp ?? '') : '');
+      setRegOtpSent(true);
+      setRegPhoneVerified(false);
+      setRegResendIn(30);
+      setNotice(`OTP sent to ${res.phone_e164}.`);
+    } catch (e: any) {
+      const detail = e?.detail?.detail ?? e?.detail;
+      if (e?.status === 409 || detail?.code === 'ACCOUNT_EXISTS') {
+        setError(detail?.message || 'An account with this mobile number already exists. Please sign in.');
+      } else {
+        setError(describe(e, 'Could not send the OTP'));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doVerifyRegOtp = async () => {
+    clearMessages();
+    if (regOtp.trim().length < 4) return setError('Enter the OTP we sent you');
+    setBusy(true);
+    try {
+      await authService.verifySignupOtp(regPhone, regOtp, 'worker');
+      setRegPhoneVerified(true);
+      setNotice('Mobile number verified.');
+    } catch (e: any) {
+      setRegPhoneVerified(false);
+      setError(describe(e, 'That OTP did not work'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doRegister = async () => {
     clearMessages();
+    if (needsPhoneOtp && !regPhoneVerified)
+      return setError('Verify your mobile number with the OTP first');
     if (!fullName.trim()) return setError('Enter your full name');
     if (!regEmail.trim()) return setError('Enter your email address');
     if (!/^\+?[0-9]{10,15}$/.test(regPhone.replace(/[\s-]/g, '')))
@@ -192,6 +254,7 @@ export default function Login() {
         role: entry === 'nurse' ? 'nurse' : 'family',
         worker_type: workerType,
       });
+      resetRegPhoneOtp();
       setVerifyEmail(regEmail);
       // Only ever prefill from the dev code in a development build. In
       // production the backend no longer returns it at all, but gating here
@@ -204,6 +267,8 @@ export default function Login() {
           : `We sent a verification code to ${res.email}.`,
       );
     } catch (e: any) {
+      const d = e?.detail?.detail ?? e?.detail;
+      if (d?.code === 'PHONE_OTP_REQUIRED') resetRegPhoneOtp();
       setError(describe(e, 'Could not create your account'));
     } finally {
       setBusy(false);
@@ -563,10 +628,65 @@ export default function Login() {
                   keyboardType="phone-pad"
                   maxLength={10}
                   value={regPhone}
-                  onChangeText={setRegPhone}
+                  onChangeText={(v) => {
+                    setRegPhone(v);
+                    if (regOtpSent || regPhoneVerified) resetRegPhoneOtp();
+                  }}
                   iconLeft="call-outline"
                   testID="reg-phone"
                 />
+                {needsPhoneOtp && (
+                  <>
+                    {regPhoneVerified ? (
+                      <Text style={[styles.hint, { color: Colors.success, fontWeight: '700' }]}>
+                        Mobile verified ✓
+                      </Text>
+                    ) : (
+                      <>
+                        {!regOtpSent ? (
+                          <GradientButton
+                            title="Send OTP"
+                            onPress={() => doSendRegOtp(false)}
+                            loading={busy}
+                            testID="reg-send-otp"
+                          />
+                        ) : (
+                          <>
+                            <InputField
+                              label="Mobile OTP"
+                              placeholder="Enter OTP"
+                              keyboardType="number-pad"
+                              maxLength={6}
+                              value={regOtp}
+                              onChangeText={setRegOtp}
+                              iconLeft="key-outline"
+                              testID="reg-otp"
+                            />
+                            <GradientButton
+                              title="Verify OTP"
+                              onPress={doVerifyRegOtp}
+                              loading={busy}
+                              testID="reg-verify-otp"
+                            />
+                            <TouchableOpacity
+                              onPress={() => doSendRegOtp(true)}
+                              disabled={regResendIn > 0 || busy}
+                              style={styles.switchRow}
+                            >
+                              <Text style={styles.switchTxt}>
+                                {regResendIn > 0 ? (
+                                  `Resend OTP in ${regResendIn}s`
+                                ) : (
+                                  <Text style={styles.switchLink}>Resend OTP</Text>
+                                )}
+                              </Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
                 <InputField
                   label="Password"
                   placeholder="Choose a password"
@@ -616,6 +736,7 @@ export default function Login() {
                   title="Create account"
                   onPress={doRegister}
                   loading={busy}
+                  disabled={needsPhoneOtp && !regPhoneVerified}
                   style={{ marginTop: Spacing.md }}
                   testID="reg-submit"
                 />

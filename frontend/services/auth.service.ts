@@ -193,10 +193,32 @@ export const authService = {
     phone: string,
     purpose: 'login' | 'signup' = 'login',
     forceResend = false,
+    role?: 'worker' | 'consumer',
   ): Promise<SendOtpResponse> {
     return api.post<SendOtpResponse>(
       '/auth/otp/send',
-      { phone_e164: normalizePhone(phone), purpose, force_resend: forceResend },
+      {
+        phone_e164: normalizePhone(phone),
+        purpose,
+        force_resend: forceResend,
+        ...(role ? { role } : {}),
+      },
+      NO_AUTH,
+    );
+  },
+
+  /**
+   * Registration step: checks the signup OTP and makes the backend remember
+   * (15 min) that this number is verified. /auth/register then needs no code.
+   */
+  async verifySignupOtp(
+    phone: string,
+    code: string,
+    role: 'worker' | 'consumer' = 'worker',
+  ): Promise<{ verified: boolean; phone_e164: string; valid_for_seconds: number }> {
+    return api.post(
+      '/auth/otp/verify-signup',
+      { phone_e164: normalizePhone(phone), code: code.trim(), role },
       NO_AUTH,
     );
   },
