@@ -5,10 +5,10 @@
  * Replaces the old AlertnessCheckModal (which logged results but never
  * blocked anything). This one is a real gate:
  *   - 5 rounds, tap the target as soon as it turns green.
- *   - PASS  (avg < 380ms, 0 lapses)   -> declaration + Confirm unlocks, then
+ *   - PASS  (avg < 700ms, 0 lapses)   -> declaration + Confirm unlocks, then
  *                                        POST /bookings/{id}/en-route succeeds.
- *   - WARNING (avg 380-450ms)          -> short breather, one retry offered.
- *   - FAIL  (avg > 450ms or >1 lapse)  -> booking is reassigned server-side;
+ *   - WARNING (avg 700-900ms)          -> short breather, one retry offered.
+ *   - FAIL  (avg > 900ms or >1 lapse) -> booking is reassigned server-side;
  *                                        nurse is told to rest, modal closes.
  *
  * The whole thing (5 taps + reading + ticking the declaration) is designed
@@ -25,7 +25,7 @@ const ROUNDS = 5;
 const BUTTON_SIZE = 76;
 const MIN_DELAY_MS = 1000;
 const MAX_DELAY_MS = 3000;
-const LAPSE_THRESHOLD_MS = 500; // must mirror app/services/fatigue_engine.py
+const LAPSE_THRESHOLD_MS = 1000; // must mirror app/services/fatigue_engine.py
 
 type Phase = 'intro' | 'waiting' | 'target' | 'round-done' | 'scoring' | 'warning' | 'fail' | 'declaration';
 
@@ -54,6 +54,8 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
   const [failMessage, setFailMessage] = useState<string | null>(null);
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [passedCheck, setPassedCheck] = useState(false);
+  // true when the failure is a technical problem (server/network), not a failed test
+  const [technicalError, setTechnicalError] = useState(false);
 
   const shownAt = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,6 +78,7 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     setFailMessage(null);
     setWarningMessage(null);
     setPassedCheck(false);
+    setTechnicalError(false);
   }, []);
 
   useEffect(() => {
@@ -100,9 +103,11 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     timerRef.current = setTimeout(() => {
       placeTargetRandomly();
       shownAt.current = Date.now();
-      scale.setValue(0);
+      // Show the target at full size immediately. It used to grow from 0 with
+      // a spring animation, so the first ~150ms it was too small to hit and
+      // that time was being counted as the nurse's reaction time.
+      scale.setValue(1);
       setPhase('target');
-      Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 5 }).start();
     }, delay);
   };
 
@@ -139,8 +144,8 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     const lapses = finalTimes.filter((t) => t > LAPSE_THRESHOLD_MS).length;
     const avg = Math.round(finalTimes.reduce((a, b) => a + b, 0) / finalTimes.length);
     if (finalFalseStarts >= 3) return 'fail';
-    if (avg < 380 && lapses === 0) return 'pass';
-    if (avg <= 450 && lapses <= 1) return 'warning';
+    if (avg < 700 && lapses === 0) return 'pass';
+    if (avg <= 900 && lapses <= 1) return 'warning';
     return 'fail';
   };
 
@@ -167,20 +172,16 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
         );
         setPhase('fail');
       }
-    } catch {
-      // Fall back to the local estimate if the network call itself failed —
-      // still require a retry through the server before allowing "Confirm".
-      const tier = localTier(finalTimes, finalFalseStarts);
-      if (tier === 'pass') {
-        setPassedCheck(true);
-        setPhase('declaration');
-      } else if (tier === 'warning') {
-        setWarningMessage('Your reaction time is a little slow. Take a breather and try once more.');
-        setPhase('warning');
-      } else {
-        setFailMessage('Could not confirm your alertness check. Please try again.');
-        setPhase('fail');
-      }
+    } catch (e: any) {
+      // The server call itself failed (network / 5xx / 4xx). Do NOT tell the
+      // nurse she is too tired — that was a technical problem, not a result.
+      // Show the real reason and let her simply run the check again.
+      const status = e?.status ? ` (code ${e.status})` : '';
+      setTechnicalError(true);
+      setFailMessage(
+        `We could not save your safety check${status}. ${e?.message || ''} Please check your internet and try again.`.trim(),
+      );
+      setPhase('fail');
     } finally {
       setSubmitting(false);
     }
@@ -202,18 +203,23 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
       await bookingsService.markEnRoute(bookingId);
       onEnRouteConfirmed();
     } catch (e: any) {
-      const code = e?.detail?.code;
+      // FastAPI wraps errors as { detail: { code, message } }
+      const d = e?.detail?.detail ?? e?.detail;
+      const code = d?.code;
       if (code === 'SAFETY_CHECK_WARNING') {
         setWarningMessage('Your reaction time is a little slow. Take a breather and try once more.');
         setPhase('warning');
       } else if (code === 'SAFETY_CHECK_FAILED') {
         setFailMessage(
-          e?.detail?.message ||
+          d?.message ||
             'You seem very fatigued right now — this booking has been reassigned so you can rest.',
         );
         setPhase('fail');
       } else {
-        setFailMessage(e?.message || 'Could not start the journey. Please try again.');
+        setTechnicalError(true);
+        setFailMessage(
+          `${d?.message || e?.message || 'Could not start the journey.'}${e?.status ? ` (code ${e.status})` : ''} Please try again.`,
+        );
         setPhase('fail');
       }
     } finally {
@@ -268,9 +274,16 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
               {phase === 'round-done' && <Text style={styles.waitTxt}>Nice tap!</Text>}
               {phase === 'target' && (
                 <Animated.View
+                  // Start the clock when the circle is actually laid out on
+                  // screen, not when we asked React to render it. On slower
+                  // phones the render takes 100-200ms and was being counted
+                  // as the nurse's reaction time.
+                  onLayout={() => {
+                    shownAt.current = Date.now();
+                  }}
                   style={[styles.targetBtn, { top: targetPos.top, left: targetPos.left, transform: [{ scale }] }]}
                 >
-                  <TouchableOpacity style={styles.targetTouchable} onPress={onTargetTap} testID="safety-check-target">
+                  <TouchableOpacity style={styles.targetTouchable} onPressIn={onTargetTap} testID="safety-check-target">
                     <Ionicons name="checkmark" size={30} color="#fff" />
                   </TouchableOpacity>
                 </Animated.View>
@@ -300,9 +313,31 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
 
           {phase === 'fail' && (
             <View style={styles.centerBlock} testID="safety-check-fail">
-              <Ionicons name="bed-outline" size={44} color={Colors.danger} />
-              <Text style={styles.resultTitle}>Time to rest</Text>
+              <Ionicons
+                name={technicalError ? 'cloud-offline-outline' : 'bed-outline'}
+                size={44}
+                color={Colors.danger}
+              />
+              <Text style={styles.resultTitle}>{technicalError ? 'Something went wrong' : 'Time to rest'}</Text>
               <Text style={styles.bodyTxt}>{failMessage}</Text>
+              {!technicalError && times.length > 0 && (
+                <Text style={[styles.bodyTxt, { color: Colors.textTertiary }]}>
+                  Your average reaction time: {average}ms · false taps: {falseStarts}
+                </Text>
+              )}
+              {technicalError && (
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={() => {
+                    setTechnicalError(false);
+                    setFailMessage(null);
+                    startGame();
+                  }}
+                  testID="safety-check-error-retry"
+                >
+                  <Text style={styles.primaryBtnTxt}>Try again</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: Colors.textSecondary }]} onPress={onClose} testID="safety-check-dismiss">
                 <Text style={styles.primaryBtnTxt}>Close</Text>
               </TouchableOpacity>
