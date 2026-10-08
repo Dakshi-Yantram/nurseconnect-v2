@@ -5,10 +5,10 @@
  * Replaces the old AlertnessCheckModal (which logged results but never
  * blocked anything). This one is a real gate:
  *   - 5 rounds, tap the target as soon as it turns green.
- *   - PASS  (avg < 380ms, 0 lapses)   -> declaration + Confirm unlocks, then
+ *   - PASS  (avg < 700ms, 0 lapses)   -> declaration + Confirm unlocks, then
  *                                        POST /bookings/{id}/en-route succeeds.
- *   - WARNING (avg 380-450ms)          -> short breather, one retry offered.
- *   - FAIL  (avg > 450ms or >1 lapse)  -> booking is reassigned server-side;
+ *   - WARNING (avg 700-900ms)          -> short breather, one retry offered.
+ *   - FAIL  (avg > 900ms or >1 lapse) -> booking is reassigned server-side;
  *                                        nurse is told to rest, modal closes.
  *
  * The whole thing (5 taps + reading + ticking the declaration) is designed
@@ -25,7 +25,7 @@ const ROUNDS = 5;
 const BUTTON_SIZE = 76;
 const MIN_DELAY_MS = 1000;
 const MAX_DELAY_MS = 3000;
-const LAPSE_THRESHOLD_MS = 500; // must mirror app/services/fatigue_engine.py
+const LAPSE_THRESHOLD_MS = 1000; // must mirror app/services/fatigue_engine.py
 
 type Phase = 'intro' | 'waiting' | 'target' | 'round-done' | 'scoring' | 'warning' | 'fail' | 'declaration';
 
@@ -144,8 +144,8 @@ export const NurseSafetyCheckModal: React.FC<Props> = ({ visible, bookingId, onC
     const lapses = finalTimes.filter((t) => t > LAPSE_THRESHOLD_MS).length;
     const avg = Math.round(finalTimes.reduce((a, b) => a + b, 0) / finalTimes.length);
     if (finalFalseStarts >= 3) return 'fail';
-    if (avg < 380 && lapses === 0) return 'pass';
-    if (avg <= 450 && lapses <= 1) return 'warning';
+    if (avg < 700 && lapses === 0) return 'pass';
+    if (avg <= 900 && lapses <= 1) return 'warning';
     return 'fail';
   };
 
