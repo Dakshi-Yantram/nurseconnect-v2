@@ -1,4 +1,4 @@
-{
+﻿{
   "cli": {
     "version": ">= 20.1.0",
     "appVersionSource": "remote"
@@ -24,7 +24,7 @@
       }
     },
     "production": {
-      "credentialsSource": "local",
+      "credentialsSource": "remote",
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dynamic Expo config.
  *
  * This is a .js config rather than app.json because two of the plugins are
@@ -34,7 +34,7 @@ const firebaseReady = exists(GOOGLE_SERVICES_ANDROID) && exists(GOOGLE_SERVICES_
 
 if (!firebaseReady) {
   console.warn(
-    '[app.config] Firebase credentials not found — Android call ringing will be ' +
+    '[app.config] Firebase credentials not found - Android call ringing will be ' +
     'disabled in this build. Add google-services.json and GoogleService-Info.plist ' +
     'to the app/ directory to enable it.',
   );
@@ -63,14 +63,14 @@ module.exports = () => ({
         NSPhotoLibraryUsageDescription:
           'NurseConnect needs photo access so you can upload verification documents and clinical photos.',
         NSCameraUsageDescription:
-          'NurseConnect uses the camera to capture clinical documentation during a visit, and — if you choose to turn it on — for video during in-app calls.',
+          'NurseConnect uses the camera to capture clinical documentation during a visit, and - if you choose to turn it on - for video during in-app calls.',
         // `voip` is what makes iOS issue a PushKit token at all; `audio` keeps
         // a call alive when the screen locks.
         UIBackgroundModes: ['voip', 'audio', 'remote-notification'],
       },
       entitlements: {
         // Flip to "production" for TestFlight / App Store builds, and set
-        // APNS_USE_SANDBOX=false on the backend to match — a token minted for
+        // APNS_USE_SANDBOX=false on the backend to match - a token minted for
         // one environment is rejected by the other.
         'aps-environment': 'development',
       },
@@ -94,11 +94,11 @@ module.exports = () => ({
         'android.permission.FOREGROUND_SERVICE_MICROPHONE',
         'android.permission.WAKE_LOCK',
         // Clinical photo capture/upload (Assessment/Visit Details screen),
-        // and — since this same permission gates it — the optional video
+        // and - since this same permission gates it - the optional video
         // toggle on in-app calls (see lib/call-manager.ts toggleVideo()).
         // Without CAMERA declared here, requestCameraPermissionsAsync()
         // resolves granted=false unconditionally and the camera can never
-        // open, even if the user taps "Allow" — the OS never shows a
+        // open, even if the user taps "Allow" - the OS never shows a
         // prompt because the app never declared the permission.
         'android.permission.CAMERA',
       ],
@@ -138,14 +138,14 @@ module.exports = () => ({
           photosPermission:
             'NurseConnect needs photo library access so you can attach clinical photos during a visit.',
           cameraPermission:
-            'NurseConnect uses the camera to capture clinical documentation during a visit, and — if you choose to turn it on — for video during in-app calls.',
+            'NurseConnect uses the camera to capture clinical documentation during a visit, and - if you choose to turn it on - for video during in-app calls.',
         },
       ],
-      // Only when credentials are present — see the note at the top.
+      // Only when credentials are present - see the note at the top.
       ...(firebaseReady ? ['@react-native-firebase/app'] : []),
       // CallKit (iOS) + ConnectionService (Android). No credentials needed.
       '@config-plugins/react-native-callkeep',
-      // iOS PushKit wiring — see plugins/withVoipPush.js.
+      // iOS PushKit wiring - see plugins/withVoipPush.js.
       './plugins/withVoipPush',
       [
         'expo-build-properties',
@@ -159,11 +159,11 @@ module.exports = () => ({
     ],
 
     experiments: { typedRoutes: true },
-    owner: 'yantram1',
+    owner: 'codewithdakshi',
 
     extra: {
       router: {},
-      eas: { projectId: 'da7f8316-ba9e-4657-9727-99cfde218f97' },
+      eas: { projectId: '1375e8db-cf00-4227-a082-3ebd02170b70' },
       firebaseConfigured: firebaseReady,
     },
   },
